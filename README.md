@@ -24,21 +24,40 @@
 
 ## 安装
 
-```powershell
-git clone https://github.com/Mi-liu/dsh-desktop-notifier.git
-```
+**推荐：在应用内安装，不需要命令行、也不用先克隆仓库。**
 
-把克隆下来的目录用 DSH 的 `plugin_manager` 装进 profile：
+1. 打开 DSH Desktop 的 **插件** 页，点 **添加插件**。
+2. 在输入框里填本仓库地址（Git 地址）：
 
-```
-plugin_manager
-  action:  install_bundle
-  target:  file:<克隆目录的绝对路径>     # 例如 D:/tools/dsh-desktop-notifier
-```
+   ```
+   https://github.com/Mi-liu/dsh-desktop-notifier
+   ```
 
-依赖：Node 侧只用到 `@deepseek-ai/schemastery`（DSH 自带的直接可解析；独立测试时 `npm i` 即可）；弹窗由 `scripts/popup.ps1` 负责，只需要 **Windows PowerShell 5.1 + .NET Framework 4.x**（Win10/11 自带），不需要 PowerShell 7。
+   或简写 `github:Mi-liu/dsh-desktop-notifier`。想装得更快可以填预编译包（GitHub Release 上的 `.tgz`）：
 
-安装后可在 GUI「插件」页看到 `dsh-desktop-notifier`，用它旁边的开关启停（开关写的是 profile 覆盖，不会与 bundle patch 里的行重复）。
+   ```
+   https://github.com/Mi-liu/dsh-desktop-notifier/releases/download/v1.1.0/dsh-desktop-notifier-1.1.0.tgz
+   ```
+
+3. 点 **安装**，装完点 **启用**；按下面的提示**完全退出 DSH 再打开一次**，设置页就出现了。
+
+**其他安装方式**
+
+- **插件市场**：装了 [`dshmarket`](https://github.com/dsh-market/dsh-market) 插件后，在 插件 → 发现（Plugin Market）里搜索本插件一键安装。市场只从 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 收录的条目安装，本仓库的收录 PR 已在审核中。
+- **本地目录**：已经 `git clone` 到本地的话，添加插件时直接填该目录的绝对路径。
+- **命令行**（等价于应用内安装）：
+
+  ```powershell
+  dsh plugin --profile <profile> add github:Mi-liu/dsh-desktop-notifier
+  ```
+
+  用 Desktop 时优先走应用内安装：它管理的 profile 与命令行默认的未必是同一个。
+
+> ⚠️ **不要按包名 `dsh-desktop-notifier` 安装**：npm 上同名包是另一位作者的别的插件（Web 侧通知）。请用上面的 Git 地址或 `.tgz` 地址。
+
+依赖：Node 侧只用到 `@deepseek-ai/schemastery`（DSH 自带可直接解析；跑独立测试时 `npm i` 即可）；弹窗由 `scripts/popup.ps1` 负责，只需要 **Windows PowerShell 5.1 + .NET Framework 4.x**（Win10/11 自带），不需要 PowerShell 7。
+
+装好后可在 GUI「插件」页看到 `dsh-desktop-notifier`，用旁边的开关启停（开关写的是 profile 覆盖，不会与 bundle patch 里的行重复）。
 
 > **设置页需要重启一次应用才会出现。** DSH 的客户端模块图在宿主启动时扫描每个包的 `dsh.client` 声明并缓存到进程结束，所以**第一次装好本插件（或插件新加了客户端半侧）后，要完全退出 DSH 再打开**，GUI 里才会多出「设置 → 桌面通知」。之后改设置即时生效，不需要再重启。
 
