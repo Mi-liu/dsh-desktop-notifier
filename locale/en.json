@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "title": "Desktop Notifier",
+    "description": "Shows a dark card in the bottom-right corner of the Windows desktop when a turn finishes, a step fails, or the agent needs a decision — the choice card answers ask_user_question directly."
+  },
+  "popup": {
+    "turnDone": "Turn finished",
+    "turnDoneEmpty": "(no text output this turn)",
+    "error": "Step failed",
+    "question": "Your decision is needed",
+    "open": "Open",
+    "close": "Close",
+    "waiting": "waiting for your choice"
+  }
+}

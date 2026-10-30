@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "title": "桌面通知弹窗",
+    "description": "任务完成、执行出错或需要你判断时，在 Windows 屏幕右下角弹出深色卡片；选择题卡片可直接点按钮回答，无需回到网页。"
+  },
+  "popup": {
+    "turnDone": "本轮工作完成",
+    "turnDoneEmpty": "（本轮没有文本输出）",
+    "error": "执行出错",
+    "question": "需要你的决定",
+    "open": "查看",
+    "close": "关闭",
+    "waiting": "等待你的选择"
+  }
+}

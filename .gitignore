@@ -1,0 +1,12 @@
+# dependencies (only needed to run the standalone tests; DSH resolves its own copy)
+node_modules/
+
+# generated test artifacts
+test/shots/
+test/*.log
+test/*.tmp
+
+# OS 杂项
+.DS_Store
+Thumbs.db
+desktop.ini

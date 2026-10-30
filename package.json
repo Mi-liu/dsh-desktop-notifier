@@ -1,0 +1,45 @@
+{
+    "name":  "dsh-desktop-notifier",
+    "version":  "1.1.0",
+    "private":  true,
+    "type":  "module",
+    "description":  "Bottom-right desktop notification and choice popups for DeepSeek Harness turn completion, errors, and pending user questions.",
+    "exports":  {
+                    ".":  "./index.js",
+                    "./client":  "./lib/client.js",
+                    "./locale/*.json":  "./locale/*.json",
+                    "./icon":  "./icon.svg"
+                },
+    "files":  [
+                  "index.js",
+                  "lib/*.js",
+                  "cordis.patch.yml",
+                  "scripts/popup.ps1",
+                  "scripts/focus-window.ps1",
+                  "locale/*.json",
+                  "icon.svg",
+                  "README.md"
+              ],
+    "dsh":  {
+                "bundle":  {
+                               "patch":  "./cordis.patch.yml"
+                           },
+                "client":  {
+                               "platform":  "web",
+                               "inject":  [
+                                              "@deepseek-ai/dsh-client-ui-renderer",
+                                              "@deepseek-ai/dsh-client-locale",
+                                              "@deepseek-ai/dsh-client-ui-settings"
+                                          ]
+                           }
+            },
+    "dependencies":  {
+                         "@deepseek-ai/schemastery":  "~3.18.5"
+                     },
+    "license":  "MIT",
+    "repository":  {
+                       "type":  "git",
+                       "url":  "git+https://github.com/Mi-liu/dsh-desktop-notifier.git"
+                   },
+    "homepage":  "https://github.com/Mi-liu/dsh-desktop-notifier#readme"
+}

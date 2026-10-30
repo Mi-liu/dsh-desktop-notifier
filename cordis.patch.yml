@@ -1,0 +1,34 @@
+# desktop-notifier bundle patch
+#
+# Inserts the bottom-right desktop popup host plugin. The row id is stable:
+# toggling the plugin in Settings overrides this row instead of duplicating it.
+- insert:
+    - id: desktop-notifier
+      name: 'dsh-desktop-notifier'
+      config:
+        enabled: true
+        # Only notify for turns that actually took a while.
+        minTurnMs: 5000
+        notifyOnTurnEnd: true
+        notifyOnError: true
+        # Auto-dismiss delay of the completion toast.
+        infoTimeoutMs: 12000
+        # Choice popup for ask_user_question; falls through to the Web UI
+        # dialog when the card is dismissed or times out.
+        answerQuestions: true
+        questionTimeoutMs: 60000
+        maxBodyChars: 260
+        # Card colours follow the DSH appearance setting (light / dark / follow
+        # Windows). Force a theme by writing light or dark here instead.
+        theme: auto
+        # One of: default | none | notify | ding | chimes | tada | question |
+        # asterisk | exclamation | critical | email | calendar | messaging |
+        # nudge | reminder.
+        sound: default
+        # always | unfocused (skip while the DSH window is in the foreground).
+        notifyWhen: always
+        focusOnOpen: true
+        locale: zh
+        # Machine-readable trail of every popup decision; also the hand-verifiable
+        # record that this plugin saw the event.
+        diagnostics: true

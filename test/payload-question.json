@@ -1,0 +1,1 @@
+{"meta":"默认工作区 · 正在等待你的选择","accent":"#F5A623","kind":"question","sound":false,"icon":"❓","timeoutMs":15000,"theme":"dark","body":"有 3 个候选方案，你要选哪一个继续？\n\n更多细节：这个选择会决定后续的实现路径。","actions":[{"label":"方案A：内置 Win32 弹窗","primary":true,"id":"opt-0"},{"id":"opt-1","label":"方案B：WPF 卡片"},{"id":"opt-2","label":"方案C：全部交给你"}],"title":"需要你的决定","slot":0}
