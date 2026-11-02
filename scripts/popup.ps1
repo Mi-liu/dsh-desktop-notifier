@@ -261,21 +261,43 @@ try {
         [void]$content.Children.Add($metaBlock)
     }
 
-    # action buttons (WrapPanel keeps 5 options on two rows)
+    # action buttons: a question stacks its options one per row (vertical), a
+    # notice keeps them on the right in a wrapping row.
     $actions = @()
     if ($data.actions) { $actions = @($data.actions) }
     if ($actions.Count -gt 0) {
-        $panel = New-Object System.Windows.Controls.WrapPanel
-        $panel.HorizontalAlignment = 'Right'
-        $panel.Margin = New-Object System.Windows.Thickness(0, 12, 0, 0)
+        $isQuestion = ($data.kind -eq 'question')
+        if ($isQuestion) {
+            $panel = New-Object System.Windows.Controls.StackPanel
+            $panel.HorizontalAlignment = 'Stretch'
+            $panel.Margin = New-Object System.Windows.Thickness(0, 12, 0, 0)
+        } else {
+            $panel = New-Object System.Windows.Controls.WrapPanel
+            $panel.HorizontalAlignment = 'Right'
+            $panel.Margin = New-Object System.Windows.Thickness(0, 12, 0, 0)
+        }
         $index = 0
         foreach ($action in $actions) {
             $btn = New-Object System.Windows.Controls.Button
-            $btn.Content = [string]$action.label
             $btn.Tag = [string]$action.id
             $btn.FontSize = 12.5
             $btn.Padding = New-Object System.Windows.Thickness(14, 6, 14, 6)
-            $btn.Margin = New-Object System.Windows.Thickness(8, 6, 0, 0)
+            if ($isQuestion) {
+                # One option per row, full width, wrapping label; the accessible
+                # name stays the option label so UI automation can click it.
+                $labelBlock = New-Object System.Windows.Controls.TextBlock
+                $labelBlock.Text = [string]$action.label
+                $labelBlock.TextWrapping = 'Wrap'
+                $labelBlock.FontSize = 12.5
+                $btn.Content = $labelBlock
+                [System.Windows.Automation.AutomationProperties]::SetName($btn, [string]$action.label)
+                $btn.HorizontalAlignment = 'Stretch'
+                $btn.HorizontalContentAlignment = 'Left'
+                $btn.Margin = New-Object System.Windows.Thickness(0, 6, 0, 0)
+            } else {
+                $btn.Content = [string]$action.label
+                $btn.Margin = New-Object System.Windows.Thickness(8, 6, 0, 0)
+            }
             $btn.Cursor = [System.Windows.Input.Cursors]::Hand
             $primary = ($action.primary -eq $true) -or (($index -eq 0) -and ($data.kind -eq 'question'))
             if ($primary) {

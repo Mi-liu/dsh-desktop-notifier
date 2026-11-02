@@ -148,6 +148,118 @@ function loadLocaleText(locale) {
   }
 }
 
+/**
+ * Long-poll answer for `GET /desktop-notifier/navigate?since=<nonce>&wait=<ms>`:
+ * reply immediately when a newer hand-off exists, otherwise hold the response
+ * until one arrives or the wait elapses (`nonce: 0` means "nothing new"). A page
+ * that was asleep simply asks again with its last nonce.
+ */
+function serveNavigation(req, res, state, waiters) {
+  const send = (body) => {
+    if (res.writableEnded) return
+    try {
+      res.writeHead(200, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      })
+      res.end(JSON.stringify(body))
+    } catch {
+      /* the page went away between read and write */
+    }
+  }
+  let since = 0
+  let waitMs = 0
+  let probe = false
+  try {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+    since = Number(url.searchParams.get('since') ?? 0) || 0
+    waitMs = Math.min(30000, Math.max(0, Number(url.searchParams.get('wait') ?? 0) || 0))
+    // `probe=1` (only used by manual checks) also reports request counters, so a
+    // live page's polling can be told apart from the probe's own request.
+    probe = url.searchParams.get('probe') === '1'
+  } catch {
+    /* a malformed URL is answered as "nothing new" */
+  }
+  state.polls = (state.polls ?? 0) + 1
+  const withStats = (body) => (probe ? { ...body, polls: state.polls, waiters: waiters.size } : body)
+  if (state.nonce > since) {
+    send(withStats({ nonce: state.nonce, sessionId: state.sessionId }))
+    return
+  }
+  if (waitMs === 0) {
+    send(withStats({ nonce: 0 }))
+    return
+  }
+  let settled = false
+  const finish = (body) => {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    waiters.delete(onUpdate)
+    res.removeListener('close', onClose)
+    send(withStats(body))
+  }
+  const onUpdate = (update) => finish(update)
+  const onClose = () => {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    waiters.delete(onUpdate)
+  }
+  const timer = setTimeout(() => finish({ nonce: 0 }), waitMs)
+  timer.unref?.()
+  waiters.add(onUpdate)
+  res.on('close', onClose)
+}
+
+/** Read a small JSON request body (the browser half's progress reports). */
+async function readJsonBody(req, limit = 8192) {
+  const chunks = []
+  let size = 0
+  try {
+    for await (const chunk of req) {
+      size += chunk.length
+      if (size > limit) return null
+      chunks.push(chunk)
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * `POST /desktop-notifier/navigate` — the browser half reporting how far it got,
+ * so a failed "查看" hand-off leaves a trace in the diagnostics file instead of
+ * failing silently inside the renderer.
+ */
+async function serveHandOffReport(req, res, report) {
+  const body = await readJsonBody(req)
+  const reply = (status, payload) => {
+    if (res.writableEnded) return
+    try {
+      res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify(payload))
+    } catch {
+      /* the page went away between read and write */
+    }
+  }
+  if (!body || typeof body !== 'object') {
+    reply(400, { ok: false })
+    return
+  }
+  try {
+    report({
+      phase: String(body.phase ?? 'unknown').slice(0, 40),
+      sessionId: typeof body.sessionId === 'string' ? body.sessionId.slice(0, 120) : null,
+      message: typeof body.message === 'string' ? body.message.slice(0, 300) : null,
+    })
+  } catch {
+    /* diagnostics are best effort */
+  }
+  reply(200, { ok: true })
+}
+
 function log(ctx, level, text) {
   try {
     const logger = ctx.logger
@@ -162,6 +274,13 @@ function log(ctx, level, text) {
 const STATE_FILE = path.join(tmpdir(), 'dsh-desktop-notifier-state.json')
 /** Diagnostics: the composed browser module graph, to verify the client half. */
 const CLIENT_GRAPH_FILE = path.join(tmpdir(), 'dsh-desktop-notifier-clientgraph.json')
+/**
+ * Long-poll route the browser half reads to learn which session a clicked
+ * "查看" card wants. It is served straight by `ctx.webServer`, so both the
+ * Electron window (`dsh-app://app/...` is forwarded to the Host listener) and a
+ * plain browser tab can reach it.
+ */
+const NAV_ROUTE = '/desktop-notifier/navigate'
 const recent = []
 
 function noteState(enabled, entry) {
@@ -433,6 +552,51 @@ export function apply(ctx, config = {}) {
     })
   }
 
+  // ── session hand-off: the card lives outside the page ────────────────────
+  // "查看" is clicked in the PowerShell popup, so the Host publishes the wanted
+  // session on a long-poll route; the browser half (lib/client.js) switches the
+  // main view through `uiWorkspace.openSession` — the same call the chat pane
+  // uses for its own session links.
+  const navigation = { nonce: 0, sessionId: null, at: 0 }
+  const navWaiters = new Set()
+  function publishNavigation(sessionId) {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return
+    navigation.nonce += 1
+    navigation.sessionId = sessionId
+    navigation.at = Date.now()
+    const update = { nonce: navigation.nonce, sessionId }
+    for (const waiter of [...navWaiters]) {
+      try {
+        waiter(update)
+      } catch {
+        /* one broken response must not drop the others */
+      }
+    }
+    note({ kind: 'navigate-published', id: sessionId, nonce: navigation.nonce })
+  }
+  if (typeof ctx.inject === 'function') {
+    ctx.inject(['webServer'], (child) => {
+      const server = child.webServer
+      if (!server || typeof server.register !== 'function') return
+      child.effect(
+        () =>
+          server.register({
+            kind: 'exact',
+            path: NAV_ROUTE,
+            handler: (req, res) => {
+              // POST = the browser half reporting its progress on a hand-off.
+              if (req.method === 'POST') {
+                void serveHandOffReport(req, res, (report) => note({ kind: 'hand-off-report', ...report }))
+                return
+              }
+              serveNavigation(req, res, navigation, navWaiters)
+            },
+          }),
+        'dsh-desktop-notifier: session hand-off route',
+      )
+    })
+  }
+
   /** Live child processes, so plugin reload cannot leave orphan popups. */
   const children = new Set()
   ctx.effect(() => () => {
@@ -544,7 +708,12 @@ export function apply(ctx, config = {}) {
     note({ kind: 'turn-card', id, elapsed, chars: body.length, notifyWhen: get('notifyWhen'), sound: get('sound') })
     void show(payload).then((result) => {
       note({ kind: 'turn-card-closed', id, action: result.action })
-      if (result.action === 'open' && get('focusOnOpen')) focusHarness(ctx)
+      if (result.action === 'open') {
+        // Publish before raising the window: the page is usually throttled while
+        // hidden, and bringing it forward wakes the poll that consumes this.
+        publishNavigation(id)
+        if (get('focusOnOpen')) focusHarness(ctx)
+      }
     })
   })
 
@@ -592,6 +761,8 @@ export function apply(ctx, config = {}) {
         body: lines.join('\n'),
         meta: [workspaceLabel(request.agent), t.waiting].filter(Boolean).join(' · '),
         accent: '#f59e0b',
+        // Vertical one-per-row options need a little more room than a notice.
+        width: 424,
         actions: options.map((option, index) => ({
           id: `opt-${index}`,
           label: squash(option.label, 40),

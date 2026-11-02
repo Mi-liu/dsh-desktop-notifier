@@ -36,6 +36,7 @@ const effects = []
  */
 function makeCtx() {
   const map = new Map()
+  const routes = new Map()
   const ctx = {
     logger: { info: () => {}, warn: () => {}, debug: () => {}, error: () => {} },
     on(name, fn, options) {
@@ -50,8 +51,27 @@ function makeCtx() {
     get() {
       return undefined
     },
+    inject(names, callback) {
+      // Only the Host web server is needed by this harness: plugins register a
+      // session hand-off route on it so a browser half can consume the click.
+      if (!names.includes('webServer')) return () => {}
+      const child = {
+        webServer: {
+          register(definition) {
+            routes.set(definition.path, definition)
+            return () => routes.delete(definition.path)
+          },
+        },
+        effect(fn) {
+          effects.push(fn)
+          return fn()
+        },
+      }
+      const cleanup = callback(child)
+      return typeof cleanup === 'function' ? cleanup : () => {}
+    },
   }
-  return { ctx, listeners: map }
+  return { ctx, listeners: map, routes }
 }
 
 const mainCtx = makeCtx()
@@ -123,7 +143,7 @@ check('registers session/event', actions().includes('session/event'))
 check('registers user-questions/request', actions().includes('user-questions/request'))
 const requestRegistration = (listeners.get('user-questions/request') ?? [])[0]
 check('user-questions listener is prepended', requestRegistration?.options?.prepend === true)
-check('registers cleanup effect', effects.length === 1)
+check('registers cleanup effects', effects.length >= 1, String(effects.length))
 
 // ── turn completion card ────────────────────────────────────────────────────
 const header = { id: 'session-1', cwd: 'C:\\work\\demo-project', origin: 'user' }
@@ -150,6 +170,36 @@ check('info card offers 查看/关闭', JSON.stringify(info?.actions) === JSON.s
   { id: 'close', label: '关闭' },
 ]), JSON.stringify(info?.actions))
 check('info card carries the resolved DSH appearance', info?.theme === resolveThemePreference('auto', PACKAGE_DIR), info?.theme)
+
+// ── "查看" hands the session to the browser half ──────────────────────────
+const navRoute = mainCtx.routes.get('/desktop-notifier/navigate')
+check('registers the session hand-off route', navRoute?.kind === 'exact', navRoute?.kind)
+/** Drive the registered route with a raw response stub, like node:http would. */
+const navAnswer = (query) => {
+  const res = {
+    writableEnded: false,
+    writeHead(status, headers) {
+      this.status = status
+      this.headers = headers
+    },
+    end(body) {
+      this.writableEnded = true
+      this.body = body
+    },
+    on() {},
+    removeListener() {},
+  }
+  navRoute.handler({ url: `/desktop-notifier/navigate${query}` }, res)
+  return JSON.parse(res.body || '{}')
+}
+const handOff = navAnswer('?since=0&wait=0')
+check(
+  'clicking open publishes the clicked session',
+  handOff.nonce >= 1 && handOff.sessionId === 'session-1',
+  JSON.stringify(handOff),
+)
+const replayed = navAnswer(`?since=${handOff.nonce}&wait=0`)
+check('a consumed hand-off is not replayed', replayed.nonce === 0, JSON.stringify(replayed))
 
 // subagents must stay silent
 const subHeader = { id: 'session-2', cwd: 'C:\\work\\demo-project', origin: 'subagent', parentSession: 'session-1' }

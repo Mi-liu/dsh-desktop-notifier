@@ -37,6 +37,27 @@ globalThis.document = {
   head: { appendChild: (el) => styles.push(el) },
   createElement: (tag) => ({ tag, dataset: {}, textContent: '', remove() {} }),
   querySelector: () => null,
+  addEventListener() {},
+  removeEventListener() {},
+}
+globalThis.addEventListener = () => {}
+globalThis.removeEventListener = () => {}
+
+/* ------------------------------------------------ session hand-off (fetch) */
+
+const polls = []
+const openedSessions = []
+/**
+ * First poll answers with a pending hand-off; every later poll stays pending,
+ * like a real long-poll that has nothing to report.
+ */
+globalThis.fetch = (url) => {
+  const target = String(url)
+  polls.push(target)
+  if (/since=0/.test(target)) {
+    return Promise.resolve({ ok: true, json: async () => ({ nonce: 1, sessionId: 'sess-42' }) })
+  }
+  return new Promise(() => {})
 }
 
 /* --------------------------------------------------------------- React stub */
@@ -141,7 +162,10 @@ await check('factory builds a CommonJS-shaped module', () => {
   })
   assert(typeof exports.apply === 'function', 'apply is missing')
   assert(Array.isArray(exports.inject), 'inject is missing')
-  assert(exports.inject.join(',') === 'slots,locale,configForms', `unexpected inject ${exports.inject.join(',')}`)
+  assert(
+    exports.inject.join(',') === 'slots,locale,configForms,uiWorkspace',
+    `unexpected inject ${exports.inject.join(',')}`,
+  )
 })
 
 const browserHalf = registration.factory(() => react)
@@ -289,6 +313,29 @@ await check('unavailable config shows the fallback copy', () => {
   const fallback = expand(section.Component({ t }))
   snapshot.status = held
   assert(textOf(fallback).includes('该插件当前未加载'), 'missing unavailable copy')
+})
+
+/* ------------------------------------------------- session hand-off (nav) */
+
+let navCleanup = null
+await check('a published hand-off opens that session', async () => {
+  const workspace = { openSession: (id) => openedSessions.push(id) }
+  const navCtx = {
+    ...fakeCtx,
+    get: (name) => (name === 'uiWorkspace' ? workspace : undefined),
+    effect(callback) {
+      const cleanup = callback()
+      if (typeof cleanup === 'function') navCleanup = cleanup
+    },
+  }
+  browserHalf.apply(navCtx)
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert(openedSessions.length === 1, `openSession called ${openedSessions.length} times`)
+  assert(openedSessions[0] === 'sess-42', `unexpected session ${openedSessions[0]}`)
+  const poll = polls.find((url) => url.includes('since=0'))
+  assert(poll && poll.includes('wait=25000'), `unexpected poll url ${poll}`)
+  assert(navCleanup !== null, 'the hand-off watcher returned no cleanup')
+  navCleanup()
 })
 
 /* ------------------------------------------------------------------ report */
