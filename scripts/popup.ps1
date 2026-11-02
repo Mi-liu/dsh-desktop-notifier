@@ -42,7 +42,7 @@ function Get-RoundedButtonTemplate {
     $xaml = @'
 <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="Button">
   <Border x:Name="bd" CornerRadius="8" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
-    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+    <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
   </Border>
   <ControlTemplate.Triggers>
     <Trigger Property="IsMouseOver" Value="True">
