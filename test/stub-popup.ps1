@@ -15,5 +15,7 @@ if (-not $action) {
     $payload = $raw | ConvertFrom-Json
     if ($payload.kind -eq 'question') { $action = 'opt-0' } else { $action = 'open' }
 }
+$result = [ordered]@{ action = $action; dismissed = $true }
+if ($action -eq 'custom' -and $env:DSH_NOTIFIER_TEXT) { $result.text = $env:DSH_NOTIFIER_TEXT }
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-[Console]::Out.WriteLine(('{"action":"' + $action + '","dismissed":true}'))
+[Console]::Out.WriteLine(($result | ConvertTo-Json -Compress))

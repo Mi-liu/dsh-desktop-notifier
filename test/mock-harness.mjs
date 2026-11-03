@@ -241,6 +241,29 @@ check('question card marks the choice', questionCard?.meta?.includes('等待你�
 check('answer comes from the card, not the Web UI', nextCalls === 0)
 check('answer selects the clicked option', JSON.stringify(answer) === JSON.stringify({ answers: [{ id: 'q1', selected: ['方案A'] }] }), JSON.stringify(answer))
 
+// ── typed free-text answer overrides the options ───────────────────────────
+process.env.DSH_NOTIFIER_ACTION = 'custom'
+process.env.DSH_NOTIFIER_TEXT = '第四个方案：自己写的'
+let customNext = false
+const customAnswer = await emit('user-questions/request', request, () => {
+  customNext = true
+  return { answers: [{ id: 'q1', selected: ['网页选项'] }] }
+})
+await wait(800)
+check(
+  'question card offers a free-text answer',
+  questionCard?.allowCustom === true && typeof questionCard?.customPlaceholder === 'string',
+  JSON.stringify({ allowCustom: questionCard?.allowCustom, placeholder: questionCard?.customPlaceholder }),
+)
+check('typed answer comes from the card, not the Web UI', customNext === false)
+check(
+  'typed answer overrides the options',
+  JSON.stringify(customAnswer) === JSON.stringify({ answers: [{ id: 'q1', selected: [], custom: '第四个方案：自己写的' }] }),
+  JSON.stringify(customAnswer),
+)
+delete process.env.DSH_NOTIFIER_ACTION
+delete process.env.DSH_NOTIFIER_TEXT
+
 // ── dismissal falls through to the Web UI ──────────────────────────────────
 process.env.DSH_NOTIFIER_ACTION = 'dismissed'
 let fellThrough = false

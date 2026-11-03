@@ -21,12 +21,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $script:ResultAction = 'error'
+$script:ResultText = ''
 $script:Timer = $null
 $script:Window = $null
+$script:CustomBox = $null
+$script:Watermark = $null
 
 function Write-ResultAndExit {
-    param([string]$Action, [string]$ErrorText)
+    param([string]$Action, [string]$ErrorText, [string]$Text)
     $payload = [ordered]@{ action = $Action; dismissed = ($Action -ne 'error') }
+    if ($Text) { $payload.text = $Text }
     if ($ErrorText) { $payload.error = $ErrorText }
     try {
         [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -326,8 +330,8 @@ try {
     # a notice keeps two compact buttons on the right.
     $actions = @()
     if ($data.actions) { $actions = @($data.actions) }
+    $isQuestion = ($data.kind -eq 'question')
     if ($actions.Count -gt 0) {
-        $isQuestion = ($data.kind -eq 'question')
         if ($isQuestion) {
             $panel = New-Object System.Windows.Controls.StackPanel
             $panel.HorizontalAlignment = 'Stretch'
@@ -388,6 +392,104 @@ try {
             $index += 1
         }
         [void]$content.Children.Add($panel)
+    }
+
+    # ── custom answer (question cards) ───────────────────────────────────────
+    # The web card always offers free text next to the options; mirror it here so
+    # a question can also be answered with something the options do not list.
+    # For a single-choice question the host lets the text override the options,
+    # so the answer is `{ id, selected: [], custom: <text> }`.
+    if ($isQuestion -and ($data.allowCustom -ne $false)) {
+        function Submit-CustomAnswer {
+            if (-not $script:CustomBox) { return }
+            $text = ([string]$script:CustomBox.Text).Trim()
+            if ($text.Length -eq 0) { return }
+            $script:ResultText = $text
+            $script:ResultAction = 'custom'
+            $script:Window.Close()
+        }
+
+        $placeholder = [string]$data.customPlaceholder
+        if (-not $placeholder) { $placeholder = '输入自定义回答…' }
+        $sendLabel = [string]$data.sendLabel
+        if (-not $sendLabel) { $sendLabel = '发送' }
+
+        $inputRow = New-Object System.Windows.Controls.Grid
+        $inputRow.Margin = New-Object System.Windows.Thickness(0, 8, 0, 0)
+        $colBox = New-Object System.Windows.Controls.ColumnDefinition
+        $colBox.Width = New-Object System.Windows.GridLength(1, 'Star')
+        $colSend = New-Object System.Windows.Controls.ColumnDefinition
+        $colSend.Width = [System.Windows.GridLength]::Auto
+        [void]$inputRow.ColumnDefinitions.Add($colBox)
+        [void]$inputRow.ColumnDefinitions.Add($colSend)
+
+        $boxBorder = New-Object System.Windows.Controls.Border
+        $boxBorder.CornerRadius = New-Object System.Windows.CornerRadius(6)
+        $boxBorder.Background = Brush $ghostBg
+        $boxBorder.BorderBrush = Brush $borderColor
+        $boxBorder.BorderThickness = New-Object System.Windows.Thickness(1)
+        $boxGrid = New-Object System.Windows.Controls.Grid
+        $boxBorder.Child = $boxGrid
+        [void]$inputRow.Children.Add($boxBorder)
+
+        $customBox = New-Object System.Windows.Controls.TextBox
+        $customBox.Background = [System.Windows.Media.Brushes]::Transparent
+        $customBox.BorderThickness = New-Object System.Windows.Thickness(0)
+        $customBox.Foreground = Brush $titleColor
+        $customBox.CaretBrush = Brush $accentText
+        $customBox.FontSize = 12.5
+        $customBox.Padding = New-Object System.Windows.Thickness(11, 7, 11, 7)
+        $customBox.VerticalContentAlignment = 'Center'
+        $customBox.TextWrapping = 'Wrap'
+        $customBox.MaxHeight = 96
+        [System.Windows.Automation.AutomationProperties]::SetName($customBox, $placeholder)
+        [void]$boxGrid.Children.Add($customBox)
+
+        $watermark = New-Object System.Windows.Controls.TextBlock
+        $watermark.Text = $placeholder
+        $watermark.Foreground = Brush $metaColor
+        $watermark.FontSize = 12.5
+        $watermark.Margin = New-Object System.Windows.Thickness(13, 0, 13, 0)
+        $watermark.VerticalAlignment = 'Center'
+        $watermark.IsHitTestVisible = $false
+        [void]$boxGrid.Children.Add($watermark)
+
+        $sendBtn = New-Object System.Windows.Controls.Button
+        $sendBtn.Content = $sendLabel
+        [System.Windows.Automation.AutomationProperties]::SetName($sendBtn, $sendLabel)
+        $sendBtn.Cursor = [System.Windows.Input.Cursors]::Hand
+        $sendBtn.Margin = New-Object System.Windows.Thickness(8, 0, 0, 0)
+        $sendBtn.Padding = New-Object System.Windows.Thickness(14, 6, 14, 6)
+        $sendBtn.FontSize = 12.5
+        $sendBtn.BorderThickness = New-Object System.Windows.Thickness(0)
+        $sendBtn.VerticalAlignment = 'Stretch'
+        $sendBtn.Template = Get-RoundedButtonTemplate -Radius 6
+        $sendBtn.Background = Brush $accent
+        $sendBtn.Foreground = Brush '#ffffff'
+        [System.Windows.Controls.Grid]::SetColumn($sendBtn, 1)
+        [void]$inputRow.Children.Add($sendBtn)
+
+        $script:CustomBox = $customBox
+        $script:Watermark = $watermark
+
+        $customBox.Add_TextChanged({
+            param($sender, $eventArgs)
+            if ([string]$sender.Text) { $script:Watermark.Visibility = 'Collapsed' }
+            else { $script:Watermark.Visibility = 'Visible' }
+        })
+        $customBox.Add_KeyDown({
+            param($sender, $eventArgs)
+            if ($eventArgs.Key -eq 'Return') {
+                $eventArgs.Handled = $true
+                Submit-CustomAnswer
+            }
+        })
+        $sendBtn.Add_Click({
+            param($sender, $eventArgs)
+            Submit-CustomAnswer
+        })
+
+        [void]$content.Children.Add($inputRow)
     }
 
     $win.Content = $root
@@ -488,7 +590,7 @@ try {
 
     [void]$win.ShowDialog()
     if ($script:Timer) { $script:Timer.Stop() }
-    Write-ResultAndExit -Action $script:ResultAction
+    Write-ResultAndExit -Action $script:ResultAction -Text $script:ResultText
 } catch {
     Write-ResultAndExit -Action 'error' -ErrorText ($_ | Out-String)
 }

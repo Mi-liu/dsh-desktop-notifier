@@ -122,6 +122,8 @@ const FALLBACK_TEXT = {
     open: '查看',
     close: '关闭',
     waiting: '等待你的选择',
+    customPlaceholder: '输入自定义回答…',
+    send: '发送',
     usedMs: (s) => `用时 ${s}s`,
   },
   en: {
@@ -132,6 +134,8 @@ const FALLBACK_TEXT = {
     open: 'Open',
     close: 'Close',
     waiting: 'waiting for your choice',
+    customPlaceholder: 'Type your own answer…',
+    send: 'Send',
     usedMs: (s) => `${s}s`,
   },
 }
@@ -763,6 +767,11 @@ export function apply(ctx, config = {}) {
         accent: '#f59e0b',
         // Vertical one-per-row options need a little more room than a notice.
         width: 424,
+        // The web card always offers a free-text answer next to the options;
+        // single-choice questions accept that text on its own.
+        allowCustom: true,
+        customPlaceholder: t.customPlaceholder,
+        sendLabel: t.send,
         actions: options.map((option, index) => ({
           id: `opt-${index}`,
           label: squash(option.label, 40),
@@ -774,6 +783,19 @@ export function apply(ctx, config = {}) {
       const result = await show(payload, { blocking: true })
       const elapsedMs = Date.now() - started
       const action = String(result?.action ?? '')
+      if (action === 'custom') {
+        // Free-text answer: the host treats `custom` as overriding the options
+        // of a single-choice question (its `selected` stays empty).
+        const text = typeof result?.text === 'string' ? result.text.trim() : ''
+        const custom = squash(text, 400)
+        if (!custom) {
+          note({ kind: 'question-card', outcome: 'custom-empty', elapsedMs })
+          return null
+        }
+        note({ kind: 'question-card', outcome: 'answered-custom', label: squash(custom, 40), elapsedMs })
+        answers.push({ id: question.id, selected: [], custom })
+        continue
+      }
       if (!action.startsWith('opt-')) {
         note({ kind: 'question-card', outcome: action || 'dismissed', elapsedMs, stderr: result?.stderr })
         return null
