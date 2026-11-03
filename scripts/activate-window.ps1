@@ -1,21 +1,34 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#
     Shared window activation helper.
 
     `Focus-HarnessWindow` brings the DeepSeek Harness desktop window to the
-    foreground. Windows only lets a process change the foreground window when it
-    already owns the foreground (or received the last input), so the reliable
-    call site is the popup process itself: the card is the foreground window when
-    the user clicks "view". A standalone caller (the host's fallback spawn) still
-    works most of the time thanks to the AttachThreadInput + synthetic-Alt dance.
+    foreground, restoring it from the tray if the user had hidden it. Windows
+    only lets a process change the foreground window when it already owns the
+    foreground (or received the last input), so the reliable call site is the
+    popup process itself: the card is the foreground window when the user clicks
+    "view". A standalone caller (the host's fallback spawn) still works most of
+    the time thanks to the AttachThreadInput + synthetic-Alt dance.
+
+    Windows are enumerated instead of using Process.MainWindowHandle, because the
+    main handle reads as zero once the window is hidden in the tray.
+
+    Never pass SW_SHOW (5) to ShowWindow here: on this Electron build SW_SHOW on
+    an already-visible window hides it (verified 2026-11-03: IsWindowVisible was
+    true before the call and false right after it, which closed the app into the
+    tray when the user clicked "view"). SW_RESTORE (9) for a minimised window and
+    SW_SHOWNOACTIVATE (4) for a hidden one are safe, and a visible window needs no
+    show-state call at all.
 
     Returns $true when the Harness window really ended up in the foreground.
 #>
 if (-not ('NotifierActivate' -as [type])) {
     Add-Type -Namespace NotifierActivate -Name Native -MemberDefinition @'
+public delegate bool EnumWindowsProc(System.IntPtr hWnd, System.IntPtr lParam);
 [DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hWnd);
 [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
 [DllImport("user32.dll")] public static extern bool IsIconic(System.IntPtr hWnd);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr hWnd);
 [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
 [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr hWnd, out uint pid);
 [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
@@ -23,20 +36,48 @@ if (-not ('NotifierActivate' -as [type])) {
 [DllImport("user32.dll")] public static extern bool BringWindowToTop(System.IntPtr hWnd);
 [DllImport("user32.dll")] public static extern bool SetWindowPos(System.IntPtr hWnd, System.IntPtr after, int x, int y, int cx, int cy, uint flags);
 [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, System.UIntPtr extra);
+[DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc callback, System.IntPtr lParam);
+[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(System.IntPtr hWnd, System.Text.StringBuilder text, int max);
 '@
 }
 
-function Get-HarnessWindow {
+$script:HarnessWindow = $null
+
+function Find-HarnessWindow {
+    $script:HarnessWindow = $null
     $fallback = $null
-    foreach ($p in @(Get-Process -ErrorAction SilentlyContinue)) {
-        $handle = $p.MainWindowHandle
-        if ($handle -eq [IntPtr]::Zero) { continue }
-        $title = [string]$p.MainWindowTitle
-        if (-not $title) { continue }
-        if ($p.ProcessName -eq 'DeepSeek Harness' -and $title -like '*DeepSeek Harness*') { return $p }
-        if (-not $fallback -and $title -like '*DeepSeek Harness*') { $fallback = $p }
+    $callback = [NotifierActivate.Native+EnumWindowsProc]{
+        param($hWnd, $lParam)
+        $owner = 0
+        [void][NotifierActivate.Native]::GetWindowThreadProcessId($hWnd, [ref]$owner)
+        $process = Get-Process -Id $owner -ErrorAction SilentlyContinue
+        if (-not $process) { return $true }
+        $builder = New-Object System.Text.StringBuilder 512
+        [void][NotifierActivate.Native]::GetWindowTextW($hWnd, $builder, 512)
+        $title = $builder.ToString()
+        if (-not $title) { return $true }
+        $item = [pscustomobject]@{ Handle = $hWnd; ProcessId = $owner; Title = $title; ProcessName = [string]$process.ProcessName }
+        if ($item.ProcessName -eq 'DeepSeek Harness' -and $title -like '*DeepSeek Harness*') {
+            $script:HarnessWindow = $item
+            return $false
+        }
+        if (-not $fallback -and $title -like '*DeepSeek Harness*') {
+            # EnumWindows callbacks cannot assign script-scope variables that stay
+            # visible after the call, so record the fallback in the script scope too.
+            if (-not $script:HarnessFallback) { $script:HarnessFallback = $item }
+        }
+        return $true
     }
-    return $fallback
+    $script:HarnessFallback = $null
+    [void][NotifierActivate.Native]::EnumWindows($callback, [IntPtr]::Zero)
+    if ($script:HarnessWindow) { return $script:HarnessWindow }
+    if ($script:HarnessFallback) { return $script:HarnessFallback }
+    return $null
+}
+
+function Get-HarnessWindow {
+    if ($script:HarnessWindow) { return $script:HarnessWindow }
+    return (Find-HarnessWindow)
 }
 
 function Test-IsForeground {
@@ -52,15 +93,17 @@ function Focus-HarnessWindow {
     [CmdletBinding()]
     param()
 
-    $target = Get-HarnessWindow
+    $target = Find-HarnessWindow
     if (-not $target) { return $false }
-    $handle = [System.IntPtr]$target.MainWindowHandle
+    $handle = [System.IntPtr]$target.Handle
     if ($handle -eq [IntPtr]::Zero) { return $false }
 
+    # Restore a minimised window, un-hide a tray-hidden one, and leave a visible
+    # window's show state untouched (SW_SHOW would hide it on this Electron build).
     if ([NotifierActivate.Native]::IsIconic($handle)) {
         [void][NotifierActivate.Native]::ShowWindow($handle, 9)
-    } else {
-        [void][NotifierActivate.Native]::ShowWindow($handle, 5)
+    } elseif (-not [NotifierActivate.Native]::IsWindowVisible($handle)) {
+        [void][NotifierActivate.Native]::ShowWindow($handle, 4)
     }
     if (Test-IsForeground -Handle $handle) { return $true }
 
@@ -107,7 +150,7 @@ function Focus-HarnessWindow {
     # Last resort: the Shell's activation API, which goes through a different path.
     try {
         $shell = New-Object -ComObject WScript.Shell
-        [void]$shell.AppActivate($target.Id)
+        [void]$shell.AppActivate($target.ProcessId)
         Start-Sleep -Milliseconds 150
     } catch { }
     return (Test-IsForeground -Handle $handle)
