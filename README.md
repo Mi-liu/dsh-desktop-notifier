@@ -37,14 +37,14 @@
    或简写 `github:Mi-liu/dsh-desktop-notifier`。想装得更快可以填预编译包（GitHub Release 上的 `.tgz`）：
 
    ```
-   https://github.com/Mi-liu/dsh-desktop-notifier/releases/download/v1.1.0/dsh-desktop-notifier-1.1.0.tgz
+   https://github.com/Mi-liu/dsh-desktop-notifier/releases/download/v1.3.0/dsh-desktop-notifier-1.3.0.tgz
    ```
 
 3. 点 **安装**，装完点 **启用**；按下面的提示**完全退出 DSH 再打开一次**，设置页就出现了。
 
 **其他安装方式**
 
-- **插件市场**：装了 [`dshmarket`](https://github.com/dsh-market/dsh-market) 插件后，在 插件 → 发现（Plugin Market）里搜索本插件一键安装。市场只从 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 收录的条目安装，本仓库的收录 PR 已在审核中。
+- **插件市场**：装了 [`dshmarket`](https://github.com/dsh-market/dsh-market) 插件后，在 插件 → 发现（Plugin Market）里搜索本插件一键安装。市场只从 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 收录的条目安装，本仓库已收录（[条目文件](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/data/plugins/Mi-liu__dsh-desktop-notifier.yml)）。
 - **本地目录**：已经 `git clone` 到本地的话，添加插件时直接填该目录的绝对路径。
 - **命令行**（等价于应用内安装）：
 
