@@ -845,6 +845,7 @@ export function apply(ctx, config = {}) {
         { id: 'close', label: t.close },
       ],
       timeoutMs: Number(get('infoTimeoutMs')),
+      focusOnOpen: Boolean(get('focusOnOpen')),
     }
   }
 
@@ -988,15 +989,21 @@ export function apply(ctx, config = {}) {
         { id: 'close', label: t.close },
       ],
       timeoutMs: Number(get('infoTimeoutMs')),
+      focusOnOpen: Boolean(get('focusOnOpen')),
     }
     note({ kind: 'turn-card', id, elapsed, chars: body.length, notifyWhen: get('notifyWhen'), sound: get('sound') })
     void show(payload).then((result) => {
-      note({ kind: 'turn-card-closed', id, action: result.action })
+      note({ kind: 'turn-card-closed', id, action: result.action, focused: result.focused })
       if (result.action === 'open') {
         // Publish before raising the window: the page is usually throttled while
         // hidden, and bringing it forward wakes the poll that consumes this.
         publishNavigation(id)
-        if (get('focusOnOpen')) focusHarness(ctx)
+        // The renderer raises the window itself right after it closes the card;
+        // this is only the fallback for builds that cannot do it.
+        if (get('focusOnOpen') && result.focused !== true) {
+          note({ kind: 'focus-fallback', focused: false })
+          focusHarness(ctx)
+        }
       }
     })
   })

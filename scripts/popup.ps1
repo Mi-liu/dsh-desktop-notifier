@@ -25,6 +25,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $script:ResultAction = 'error'
 $script:ResultText = ''
+$script:ResultFocused = $null
+$script:FocusAfterClose = $false
 $script:Timer = $null
 $script:Window = $null
 $script:CustomBox = $null
@@ -34,11 +36,15 @@ $script:WorkArea = $null
 # Sound presets live in one helper so the Settings page's preview button plays
 # exactly what the cards play.
 . (Join-Path $PSScriptRoot 'sound.ps1')
+# The card is the foreground window when the user clicks an action, which is the
+# only reliable moment to hand the foreground over to the Harness window.
+. (Join-Path $PSScriptRoot 'activate-window.ps1')
 
 function Write-ResultAndExit {
     param([string]$Action, [string]$ErrorText, [string]$Text)
     $payload = [ordered]@{ action = $Action; dismissed = ($Action -ne 'error') }
     if ($Text) { $payload.text = $Text }
+    if ($null -ne $script:ResultFocused) { $payload.focused = [bool]$script:ResultFocused }
     if ($ErrorText) { $payload.error = $ErrorText }
     try {
         [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
@@ -438,6 +444,12 @@ try {
             $btn.Add_Click({
                 param($sender, $eventArgs)
                 $script:ResultAction = [string]$sender.Tag
+                if ($script:ResultAction -eq 'open' -and ($data.focusOnOpen -ne $false)) {
+                    # Focus after the card is gone: closing the foreground window
+                    # would otherwise hand the foreground back to whatever was
+                    # behind it, undoing the raise.
+                    $script:FocusAfterClose = $true
+                }
                 $script:Window.Close()
             })
             [void]$panel.Children.Add($btn)
@@ -614,6 +626,9 @@ try {
 
     [void]$win.ShowDialog()
     if ($script:Timer) { $script:Timer.Stop() }
+    if ($script:FocusAfterClose) {
+        try { $script:ResultFocused = [bool](Focus-HarnessWindow) } catch { $script:ResultFocused = $false }
+    }
     Write-ResultAndExit -Action $script:ResultAction -Text $script:ResultText
 } catch {
     Write-ResultAndExit -Action 'error' -ErrorText ($_ | Out-String)

@@ -40,7 +40,7 @@
    或简写 `github:Mi-liu/dsh-desktop-notifier`。想装得更快可以填预编译包（GitHub Release 上的 `.tgz`）：
 
    ```
-   https://github.com/Mi-liu/dsh-desktop-notifier/releases/download/v1.5.0/dsh-desktop-notifier-1.5.0.tgz
+   https://github.com/Mi-liu/dsh-desktop-notifier/releases/download/v1.5.1/dsh-desktop-notifier-1.5.1.tgz
    ```
 
 3. 点 **安装**，装完点 **启用**；按下面的提示**完全退出 DSH 再打开一次**，设置页就出现了。

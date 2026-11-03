@@ -170,6 +170,10 @@ check('info card offers 查看/关闭', JSON.stringify(info?.actions) === JSON.s
   { id: 'close', label: '关闭' },
 ]), JSON.stringify(info?.actions))
 check('info card carries the resolved DSH appearance', info?.theme === resolveThemePreference('auto', PACKAGE_DIR), info?.theme)
+// The renderer raises the Harness window itself when the user clicks 查看: at
+// that moment the card owns the foreground, which is what Windows requires. The
+// flag mirrors the setting so turning it off keeps the old behaviour.
+check('info card mirrors the focus setting', info?.focusOnOpen === false, info?.focusOnOpen)
 
 // ── "查看" hands the session to the browser half ──────────────────────────
 const navRoute = mainCtx.routes.get('/desktop-notifier/navigate')
