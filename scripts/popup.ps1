@@ -3,6 +3,10 @@
     dsh-desktop-notifier popup renderer.
 
     Shows one WPF card in the bottom-right corner of the primary work area.
+    The card follows the Windows 11 toast layout: a slim header with the app
+    icon, the app name and a close button, then a body with the plugin glyph,
+    a bold title, the message and a dimmed meta line, and finally the actions.
+
     Reads a JSON payload (UTF-8) from -PayloadFile, writes exactly one JSON
     result line to stdout, then exits.
 
@@ -39,21 +43,23 @@ function Brush([string]$hex) {
 }
 
 function Get-RoundedButtonTemplate {
+    param([int]$Radius = 8)
     $xaml = @'
 <ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" TargetType="Button">
-  <Border x:Name="bd" CornerRadius="8" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
+  <Border x:Name="bd" CornerRadius="__RADIUS__" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}">
     <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
   </Border>
   <ControlTemplate.Triggers>
     <Trigger Property="IsMouseOver" Value="True">
-      <Setter TargetName="bd" Property="Opacity" Value="0.82"/>
+      <Setter TargetName="bd" Property="Opacity" Value="0.78"/>
     </Trigger>
     <Trigger Property="IsPressed" Value="True">
-      <Setter TargetName="bd" Property="Opacity" Value="0.65"/>
+      <Setter TargetName="bd" Property="Opacity" Value="0.6"/>
     </Trigger>
   </ControlTemplate.Triggers>
 </ControlTemplate>
 '@
+    $xaml = $xaml.Replace('__RADIUS__', [string]$Radius)
     return [System.Windows.Markup.XamlReader]::Parse($xaml)
 }
 
@@ -128,21 +134,39 @@ try {
 
     if ($dark) {
         $bgColor = '#232324'; $borderColor = '#3a3a3b'; $titleColor = '#f9fafb'
-        $bodyColor = '#cfd3d6'; $metaColor = '#adb2b8'
-        $btnBg = '#2c2c2e'; $btnFg = '#cfd3d6'
-        $closeFg = '#81858c'; $shadowOpacity = 0.55
+        $bodyColor = '#cfd3d6'; $metaColor = '#adb2b8'; $appNameColor = '#a9aeb6'
+        $ghostBg = '#14FFFFFF'; $ghostFg = '#e7e9ec'; $closeFg = '#8e939b'
+        $shadowOpacity = 0.5; $glyphName = 'glyph-dark.png'; $badgeEdge = '#14FFFFFF'
     } else {
-        $bgColor = '#ffffff'; $borderColor = '#e6e6e6'; $titleColor = '#0f1115'
-        $bodyColor = '#61666b'; $metaColor = '#81858c'
-        $btnBg = '#f1f3f5'; $btnFg = '#0f1115'
-        $closeFg = '#81858c'; $shadowOpacity = 0.16
+        $bgColor = '#ffffff'; $borderColor = '#e6e7ea'; $titleColor = '#0f1115'
+        $bodyColor = '#61666b'; $metaColor = '#81858c'; $appNameColor = '#5f646c'
+        $ghostBg = '#f2f3f5'; $ghostFg = '#25292f'; $closeFg = '#6c7178'
+        $shadowOpacity = 0.16; $glyphName = 'glyph-light.png'; $badgeEdge = '#14000000'
     }
     $accent = if ($data.accent) { [string]$data.accent } else { '#4176e6' }
+    # 选项行首项用“强调色的浅色底 + 强调色文字”，比整块实心蓝更接近系统通知的观感。
+    $accentSoft = if ($dark) { '#2E4176E6' } else { '#1F4176E6' }
+    $accentText = if ($dark) { '#8fb6ff' } else { '#2563eb' }
 
     $work = [System.Windows.SystemParameters]::WorkArea
-    $width = if ($data.width) { [double]$data.width } else { 384 }
+    $width = if ($data.width) { [double]$data.width } else { 400 }
     $margin = 12
     $slot = if ($null -ne $data.slot) { [int]$data.slot } else { 0 }
+
+    function Load-Bitmap([string]$path) {
+        if (-not (Test-Path -LiteralPath $path)) { return $null }
+        $bi = New-Object System.Windows.Media.Imaging.BitmapImage
+        $bi.BeginInit()
+        $bi.UriSource = New-Object System.Uri($path, [System.UriKind]::Absolute)
+        $bi.CacheOption = [System.Windows.Media.Imaging.BitmapCacheOption]::OnLoad
+        $bi.EndInit()
+        $bi.Freeze()
+        return $bi
+    }
+
+    $assetsDir = Join-Path $PSScriptRoot '..\assets'
+    $glyphImage = Load-Bitmap (Join-Path $assetsDir $glyphName)
+    $appImage = Load-Bitmap (Join-Path $assetsDir 'icon.png')
 
     # ── window ───────────────────────────────────────────────────────────────
     $win = New-Object System.Windows.Window
@@ -164,39 +188,24 @@ try {
 
     # outer margin reserves room for the drop shadow
     $root = New-Object System.Windows.Controls.Grid
-    $root.Margin = New-Object System.Windows.Thickness(18, 10, 18, 18)
+    $root.Margin = New-Object System.Windows.Thickness(20, 12, 20, 22)
 
     $card = New-Object System.Windows.Controls.Border
-    $card.CornerRadius = New-Object System.Windows.CornerRadius(12)
+    $card.CornerRadius = New-Object System.Windows.CornerRadius(8)
     $card.Background = Brush $bgColor
     $card.BorderBrush = Brush $borderColor
     $card.BorderThickness = New-Object System.Windows.Thickness(1)
     $shadow = New-Object System.Windows.Media.Effects.DropShadowEffect
-    $shadow.BlurRadius = 26; $shadow.ShadowDepth = 6; $shadow.Opacity = $shadowOpacity
+    $shadow.BlurRadius = 30; $shadow.ShadowDepth = 8; $shadow.Opacity = $shadowOpacity
     $shadow.Color = [System.Windows.Media.ColorConverter]::ConvertFromString('#000000')
     $card.Effect = $shadow
     [void]$root.Children.Add($card)
 
-    $grid = New-Object System.Windows.Controls.Grid
-    $colAccent = New-Object System.Windows.Controls.ColumnDefinition
-    $colAccent.Width = New-Object System.Windows.GridLength(4)
-    $colBody = New-Object System.Windows.Controls.ColumnDefinition
-    $colBody.Width = New-Object System.Windows.GridLength(1, 'Star')
-    [void]$grid.ColumnDefinitions.Add($colAccent)
-    [void]$grid.ColumnDefinitions.Add($colBody)
-
-    $bar = New-Object System.Windows.Controls.Border
-    $bar.Background = Brush $accent
-    $bar.CornerRadius = New-Object System.Windows.CornerRadius(12, 0, 0, 12)
-    [System.Windows.Controls.Grid]::SetColumn($bar, 0)
-    [void]$grid.Children.Add($bar)
-
     $content = New-Object System.Windows.Controls.StackPanel
-    $content.Margin = New-Object System.Windows.Thickness(16, 14, 12, 14)
-    [System.Windows.Controls.Grid]::SetColumn($content, 1)
-    [void]$grid.Children.Add($content)
+    $content.Margin = New-Object System.Windows.Thickness(16, 12, 14, 14)
+    $card.Child = $content
 
-    # header: icon + title + close
+    # ── header: app badge + app name + close (the Windows toast top strip) ───
     $header = New-Object System.Windows.Controls.Grid
     foreach ($w in @('Auto', '*', 'Auto')) {
         $col = New-Object System.Windows.Controls.ColumnDefinition
@@ -205,64 +214,116 @@ try {
         [void]$header.ColumnDefinitions.Add($col)
     }
 
-    $iconBlock = New-Object System.Windows.Controls.TextBlock
-    $iconBlock.Text = if ($data.icon) { [string]$data.icon } else { '' }
-    $iconBlock.FontSize = 16
-    $iconBlock.VerticalAlignment = 'Center'
-    $iconBlock.Margin = New-Object System.Windows.Thickness(0, 0, 9, 0)
-    [System.Windows.Controls.Grid]::SetColumn($iconBlock, 0)
-    [void]$header.Children.Add($iconBlock)
+    $appBadge = New-Object System.Windows.Controls.Border
+    $appBadge.Width = 18; $appBadge.Height = 18
+    $appBadge.CornerRadius = New-Object System.Windows.CornerRadius(5)
+    $appBadge.BorderThickness = New-Object System.Windows.Thickness(1)
+    $appBadge.BorderBrush = Brush $badgeEdge
+    $appBadge.VerticalAlignment = 'Center'
+    if ($appImage) {
+        $badgeBrush = New-Object System.Windows.Media.ImageBrush($appImage)
+        $badgeBrush.Stretch = 'UniformToFill'
+        $appBadge.Background = $badgeBrush
+    } else {
+        $appBadge.Background = Brush $ghostBg
+    }
+    [System.Windows.Controls.Grid]::SetColumn($appBadge, 0)
+    [void]$header.Children.Add($appBadge)
 
-    $titleBlock = New-Object System.Windows.Controls.TextBlock
-    $titleBlock.Text = [string]$data.title
-    $titleBlock.FontSize = 14
-    $titleBlock.FontWeight = 'SemiBold'
-    $titleBlock.Foreground = Brush $titleColor
-    $titleBlock.TextTrimming = 'CharacterEllipsis'
-    $titleBlock.VerticalAlignment = 'Center'
-    [System.Windows.Controls.Grid]::SetColumn($titleBlock, 1)
-    [void]$header.Children.Add($titleBlock)
+    $appName = New-Object System.Windows.Controls.TextBlock
+    $appName.Text = if ($data.appName) { [string]$data.appName } else { 'DeepSeek Harness' }
+    $appName.FontSize = 11.5
+    $appName.Foreground = Brush $appNameColor
+    $appName.VerticalAlignment = 'Center'
+    $appName.Margin = New-Object System.Windows.Thickness(8, 0, 8, 0)
+    $appName.TextTrimming = 'CharacterEllipsis'
+    [System.Windows.Controls.Grid]::SetColumn($appName, 1)
+    [void]$header.Children.Add($appName)
 
     $closeBtn = New-Object System.Windows.Controls.Button
     $closeBtn.Content = '✕'
-    $closeBtn.FontSize = 12
+    $closeBtn.FontSize = 11
     $closeBtn.Foreground = Brush $closeFg
     $closeBtn.Background = [System.Windows.Media.Brushes]::Transparent
     $closeBtn.BorderThickness = New-Object System.Windows.Thickness(0)
-    $closeBtn.Padding = New-Object System.Windows.Thickness(4, 0, 0, 0)
+    $closeBtn.Padding = New-Object System.Windows.Thickness(6, 2, 6, 2)
     $closeBtn.Cursor = [System.Windows.Input.Cursors]::Hand
     $closeBtn.ToolTip = 'Esc'
     $closeBtn.VerticalAlignment = 'Center'
-    $closeBtn.Template = Get-RoundedButtonTemplate
+    $closeBtn.Template = Get-RoundedButtonTemplate -Radius 6
+    [System.Windows.Automation.AutomationProperties]::SetName($closeBtn, 'Close')
     [System.Windows.Controls.Grid]::SetColumn($closeBtn, 2)
     [void]$header.Children.Add($closeBtn)
     [void]$content.Children.Add($header)
+
+    # ── body: glyph + (title / message / meta) ──────────────────────────────
+    $bodyGrid = New-Object System.Windows.Controls.Grid
+    $bodyGrid.Margin = New-Object System.Windows.Thickness(0, 12, 0, 0)
+    $colGlyph = New-Object System.Windows.Controls.ColumnDefinition
+    $colGlyph.Width = [System.Windows.GridLength]::Auto
+    $colText = New-Object System.Windows.Controls.ColumnDefinition
+    $colText.Width = New-Object System.Windows.GridLength(1, 'Star')
+    [void]$bodyGrid.ColumnDefinitions.Add($colGlyph)
+    [void]$bodyGrid.ColumnDefinitions.Add($colText)
+
+    if ($glyphImage) {
+        $glyph = New-Object System.Windows.Controls.Image
+        $glyph.Source = $glyphImage
+        $glyph.Width = 44; $glyph.Height = 44
+        $glyph.Stretch = 'Uniform'
+        $glyph.VerticalAlignment = 'Top'
+        $glyph.Margin = New-Object System.Windows.Thickness(0, 2, 16, 0)
+        [System.Windows.Media.RenderOptions]::SetBitmapScalingMode($glyph, [System.Windows.Media.BitmapScalingMode]::HighQuality)
+        [void]$bodyGrid.Children.Add($glyph)
+    } else {
+        # fallback for a partial install: keep the old emoji glyph
+        $glyph = New-Object System.Windows.Controls.TextBlock
+        $glyph.Text = if ($data.icon) { [string]$data.icon } else { '' }
+        $glyph.FontSize = 26
+        $glyph.VerticalAlignment = 'Top'
+        $glyph.Margin = New-Object System.Windows.Thickness(0, 0, 14, 0)
+        [void]$bodyGrid.Children.Add($glyph)
+    }
+
+    $textCol = New-Object System.Windows.Controls.StackPanel
+    [System.Windows.Controls.Grid]::SetColumn($textCol, 1)
+    [void]$bodyGrid.Children.Add($textCol)
+
+    $titleBlock = New-Object System.Windows.Controls.TextBlock
+    $titleBlock.Text = [string]$data.title
+    $titleBlock.FontSize = 15
+    $titleBlock.FontWeight = 'SemiBold'
+    $titleBlock.Foreground = Brush $titleColor
+    $titleBlock.TextWrapping = 'Wrap'
+    [void]$textCol.Children.Add($titleBlock)
 
     if ($data.body) {
         $bodyBlock = New-Object System.Windows.Controls.TextBlock
         $bodyBlock.Text = [string]$data.body
         $bodyBlock.FontSize = 12.5
-        $bodyBlock.LineHeight = 19
+        $bodyBlock.LineHeight = 18
         $bodyBlock.Foreground = Brush $bodyColor
         $bodyBlock.TextWrapping = 'Wrap'
-        $bodyBlock.Margin = New-Object System.Windows.Thickness(0, 9, 0, 0)
-        $bodyBlock.MaxHeight = 112
+        $bodyBlock.MaxHeight = 89
         $bodyBlock.TextTrimming = 'CharacterEllipsis'
-        [void]$content.Children.Add($bodyBlock)
+        $bodyBlock.Margin = New-Object System.Windows.Thickness(0, 5, 0, 0)
+        [void]$textCol.Children.Add($bodyBlock)
     }
 
     if ($data.meta) {
         $metaBlock = New-Object System.Windows.Controls.TextBlock
         $metaBlock.Text = [string]$data.meta
-        $metaBlock.FontSize = 11
+        $metaBlock.FontSize = 11.5
         $metaBlock.Foreground = Brush $metaColor
         $metaBlock.TextWrapping = 'Wrap'
-        $metaBlock.Margin = New-Object System.Windows.Thickness(0, 8, 0, 0)
-        [void]$content.Children.Add($metaBlock)
+        $metaBlock.Margin = New-Object System.Windows.Thickness(0, 6, 0, 0)
+        [void]$textCol.Children.Add($metaBlock)
     }
+    [void]$content.Children.Add($bodyGrid)
 
-    # action buttons: a question stacks its options one per row (vertical), a
-    # notice keeps them on the right in a wrapping row.
+    # ── actions ─────────────────────────────────────────────────────────────
+    # A question stacks its options one per row (full width, wrapping label);
+    # a notice keeps two compact buttons on the right.
     $actions = @()
     if ($data.actions) { $actions = @($data.actions) }
     if ($actions.Count -gt 0) {
@@ -270,45 +331,54 @@ try {
         if ($isQuestion) {
             $panel = New-Object System.Windows.Controls.StackPanel
             $panel.HorizontalAlignment = 'Stretch'
-            $panel.Margin = New-Object System.Windows.Thickness(0, 12, 0, 0)
+            $panel.Margin = New-Object System.Windows.Thickness(0, 14, 0, 0)
         } else {
             $panel = New-Object System.Windows.Controls.WrapPanel
             $panel.HorizontalAlignment = 'Right'
-            $panel.Margin = New-Object System.Windows.Thickness(0, 12, 0, 0)
+            $panel.Margin = New-Object System.Windows.Thickness(0, 14, 0, 0)
         }
         $index = 0
         foreach ($action in $actions) {
             $btn = New-Object System.Windows.Controls.Button
             $btn.Tag = [string]$action.id
-            $btn.FontSize = 12.5
-            $btn.Padding = New-Object System.Windows.Thickness(14, 6, 14, 6)
+            $btn.Cursor = [System.Windows.Input.Cursors]::Hand
+            $btn.BorderThickness = New-Object System.Windows.Thickness(0)
+            $primary = ($action.primary -eq $true) -or (($index -eq 0) -and $isQuestion)
             if ($isQuestion) {
-                # One option per row, full width, wrapping label; the accessible
-                # name stays the option label so UI automation can click it.
+                # One option per row: a quiet row that lights up in the accent
+                # colour, with the accessible name kept equal to the label.
                 $labelBlock = New-Object System.Windows.Controls.TextBlock
                 $labelBlock.Text = [string]$action.label
                 $labelBlock.TextWrapping = 'Wrap'
-                $labelBlock.FontSize = 12.5
                 $btn.Content = $labelBlock
                 [System.Windows.Automation.AutomationProperties]::SetName($btn, [string]$action.label)
                 $btn.HorizontalAlignment = 'Stretch'
                 $btn.HorizontalContentAlignment = 'Left'
                 $btn.Margin = New-Object System.Windows.Thickness(0, 6, 0, 0)
+                $btn.Padding = New-Object System.Windows.Thickness(12, 9, 12, 9)
+                $btn.Template = Get-RoundedButtonTemplate -Radius 6
+                if ($primary) {
+                    $btn.Background = Brush $accentSoft
+                    $btn.Foreground = Brush $accentText
+                } else {
+                    $btn.Background = Brush $ghostBg
+                    $btn.Foreground = Brush $ghostFg
+                }
             } else {
                 $btn.Content = [string]$action.label
-                $btn.Margin = New-Object System.Windows.Thickness(8, 6, 0, 0)
+                [System.Windows.Automation.AutomationProperties]::SetName($btn, [string]$action.label)
+                $btn.Margin = New-Object System.Windows.Thickness(8, 0, 0, 0)
+                $btn.Padding = New-Object System.Windows.Thickness(14, 6, 14, 6)
+                $btn.FontSize = 12.5
+                $btn.Template = Get-RoundedButtonTemplate -Radius 6
+                if ($primary) {
+                    $btn.Background = Brush $accent
+                    $btn.Foreground = Brush '#ffffff'
+                } else {
+                    $btn.Background = Brush $ghostBg
+                    $btn.Foreground = Brush $ghostFg
+                }
             }
-            $btn.Cursor = [System.Windows.Input.Cursors]::Hand
-            $primary = ($action.primary -eq $true) -or (($index -eq 0) -and ($data.kind -eq 'question'))
-            if ($primary) {
-                $btn.Background = Brush $accent
-                $btn.Foreground = Brush '#ffffff'
-            } else {
-                $btn.Background = Brush $btnBg
-                $btn.Foreground = Brush $btnFg
-            }
-            $btn.BorderThickness = New-Object System.Windows.Thickness(0)
-            $btn.Template = Get-RoundedButtonTemplate
             $btn.Add_Click({
                 param($sender, $eventArgs)
                 $script:ResultAction = [string]$sender.Tag
@@ -320,7 +390,6 @@ try {
         [void]$content.Children.Add($panel)
     }
 
-    $card.Child = $grid
     $win.Content = $root
 
     $closeBtn.Add_Click({

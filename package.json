@@ -1,6 +1,6 @@
 {
     "name":  "dsh-desktop-notifier",
-    "version":  "1.2.0",
+    "version":  "1.3.0",
     "private":  true,
     "type":  "module",
     "description":  "Bottom-right desktop notification and choice popups for DeepSeek Harness turn completion, errors, and pending user questions.",
@@ -16,6 +16,7 @@
                   "cordis.patch.yml",
                   "scripts/popup.ps1",
                   "scripts/focus-window.ps1",
+                  "assets/*.png",
                   "locale/*.json",
                   "icon.svg",
                   "README.md"
