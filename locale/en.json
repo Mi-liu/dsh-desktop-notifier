@@ -11,6 +11,10 @@
     "open": "Open",
     "close": "Close",
     "waiting": "waiting for your choice",
+    "approvalTitle": "Permission needed",
+    "approvalWaiting": "waiting for your decision",
+    "allow": "Allow once",
+    "deny": "Deny",
     "customPlaceholder": "Type your own answer…",
     "send": "Send"
   }

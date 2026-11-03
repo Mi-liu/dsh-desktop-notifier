@@ -5,8 +5,11 @@
 - **完成通知**：一轮对话结束时，弹出「本轮工作完成」卡片（含本轮最后一段回复、工作区名、时间、用时，按钮「查看 / 关闭」）。点「查看」会把 Harness 窗口拉到最前面**并切回这条对话**——哪怕你当时正在看别的会话。
 - **出错通知**：一个 step 失败时，弹出「本轮出错」卡片（红色强调，按钮「关闭」）。
 - **选择判断弹窗**：模型调用 `ask_user_question` 时，把问题与选项做成原生卡片（选项**垂直排列、一行一个**，长文案自动换行）；**点选项即作答**，工具调用立刻拿到答案。选项里没有想要的答案时，可以在卡片底部的输入框里**手动输入**（点「发送」或直接按回车），你写的内容会作为自定义回答回给模型。关闭/超时/无法渲染时自动回落到 DSH 自带的 Web UI 对话框，行为与未装插件时一致。
+- **审批请求卡片**：DSH 需要你授权某个工具调用时，弹出一张「允许一次 / 拒绝」的卡片，点一下就把决定交回去；默认只在 Harness 窗口不在前台时才弹（前台时仍用应用内的审批卡），超时或关闭会交回 Web UI，不会卡住整轮。
 - **跟随外观**：卡片配色取 DSH 设计 token，默认 `theme: auto`——DSH 是浅色就弹浅色卡，切到深色就弹深色卡（偏好为「跟随系统」时再读 Windows 应用主题）。
+- **停在当前屏幕**：卡片出现在 DSH 主窗口所在的那块屏幕上；找不到窗口时退到鼠标所在屏幕，再退到主屏。
 - **系统通知外观**：卡片按 Windows 11 通知的排布——顶部是应用图标、应用名和关闭按钮，正文是铃铛图标 + 加粗标题 + 说明文字 + 灰字元信息，操作按钮收在右下角（选择项则是整行排列）。
+- **可自定义提示音**：内置十余种系统音效，也可以在设置里填一个自己的 `.wav` 路径；设置页有「试听」和三种「测试通知」按钮，用来确认通知链路正常。
 
 实现：Host 插件（Node，触发事件）+ `scripts/popup.ps1`（WPF，Windows PowerShell 5.1 即可，不需要 PowerShell 7）。
 
@@ -37,7 +40,7 @@
    或简写 `github:Mi-liu/dsh-desktop-notifier`。想装得更快可以填预编译包（GitHub Release 上的 `.tgz`）：
 
    ```
-   https://github.com/Mi-liu/dsh-desktop-notifier/releases/download/v1.4.0/dsh-desktop-notifier-1.4.0.tgz
+   https://github.com/Mi-liu/dsh-desktop-notifier/releases/download/v1.5.0/dsh-desktop-notifier-1.5.0.tgz
    ```
 
 3. 点 **安装**，装完点 **启用**；按下面的提示**完全退出 DSH 再打开一次**，设置页就出现了。
@@ -70,9 +73,11 @@ GUI **设置 → 桌面通知** 里可以直接改全部选项（翻译见 `loca
 | --- | --- |
 | 通知范围 | 总开关、完成通知、出错通知、接管 `ask_user_question` |
 | 通知条件 | **何时通知**：`始终通知` / `仅在 DSH 未聚焦时通知`（Harness 在前台时连卡片带声音一起跳过） |
-| 提醒方式 | **提示音**：默认（按卡片类型）/ 静音 / 系统通知 / 叮 / 风铃 / 完成音 / 邮件 / 日历 / 消息 / 轻提示 / 系统提示 / 提问音 / 提示音 / 警告音 / 错误音 |
+| 审批请求 | **何时接管审批**：`仅未聚焦时` / `总是` / `关闭`；以及审批卡等待时长 |
+| 提醒方式 | **提示音**：默认（按卡片类型）/ 静音 / 系统通知 / 叮 / 风铃 / 完成音 / 邮件 / 日历 / 消息 / 轻提示 / 系统提示 / 提问音 / 提示音 / 警告音 / 错误音；**自定义提示音文件**（`.wav` 绝对路径，存在时优先）与「试听」按钮 |
 | 外观与交互 | 卡片外观（跟随 DSH 外观 / 浅色 / 深色 / 跟随 Windows）、点「查看」时前置窗口 |
 | 时间与内容 | 最短回合、通知卡自动消失、选择卡等待、正文截断长度、文案语言 |
+| 测试 | 三个按钮分别立刻弹出「完成通知 / 选择卡 / 审批卡」样例，用来确认桌面通知链路 |
 
 设置里的值保存在 profile 的 `cordis.patch.yml`（`desktop-notifier` 行的 `config`），也可以直接改文件；每个选项右侧有一个「恢复默认」按钮（仅在该项被改过时出现）。
 
@@ -86,11 +91,14 @@ GUI **设置 → 桌面通知** 里可以直接改全部选项（翻译见 `loca
 | `notifyOnError` | `true` | 是否弹出错通知 |
 | `notifyWhen` | `always` | `always` 总是通知；`unfocused` 仅当 Harness 窗口不在前台时通知（前台时直接跳过，不弹卡片也不响） |
 | `answerQuestions` | `true` | 是否用桌面卡片接管 `ask_user_question` |
+| `answerApprovals` | `unfocused` | 是否用桌面卡片接管审批请求：`unfocused` 仅 Harness 未聚焦时、`always` 总是、`off` 只用 Web UI |
+| `approvalTimeoutMs` | `120000` | 审批卡等待时间；超时后把请求交回 Web UI |
 | `infoTimeoutMs` | `12000` | 通知卡自动消失时间（毫秒） |
 | `questionTimeoutMs` | `60000` | 选择卡等待时间；超时后回落到 Web UI 对话框 |
 | `maxBodyChars` | `260` | 正文截断长度 |
 | `theme` | `auto` | `auto` 跟随 DSH 当前外观（读 profile 里 ui-theme 的偏好；偏好为 `system` 时再读 Windows 应用主题）；`light` / `dark` 强制指定；`system` 忽略 DSH 设置、只看 Windows |
 | `sound` | `default` | 提示音：`default` 按卡片类型、`none` 静音，或 `notify` / `ding` / `chimes` / `tada` / `question` / `asterisk` / `exclamation` / `critical` / `email` / `calendar` / `messaging` / `nudge` / `reminder` |
+| `soundFile` | `''` | 自定义 `.wav` 绝对路径；文件存在时优先于 `sound` |
 | `focusOnOpen` | `true` | 通知卡点「查看」时把 Harness 窗口拉到前台（同时通过 Host 侧长轮询把页面切回该卡片对应的对话） |
 | `locale` | `zh` | 文案语言，读取 `locale/<lang>.json`，缺省回落内置中文 |
 | `diagnostics` | `true` | 写诊断状态文件 |
@@ -104,7 +112,7 @@ GUI **设置 → 桌面通知** 里可以直接改全部选项（翻译见 `loca
 %TEMP%\dsh-desktop-notifier-state.json
 ```
 
-里面有最近发生的事：`activate`、`turn-card`、`turn-card-closed`、`error-card`、`question-card`（含 `answered` / `dismissed` / `timeout`）、以及 `turn-stopping-ignored`（附忽略原因，例如 `below-minTurnMs`、`subagent-session`）。排查「为什么没弹」先看这个文件。
+里面有最近发生的事：`activate`、`turn-card`、`turn-card-closed`、`error-card`、`question-card`（含 `answered` / `dismissed` / `timeout`）、`approval-card`（含 `allowed-once` / `rejected` / `delegated`）、`test-card`、`preview-sound`，以及 `turn-stopping-ignored`（附忽略原因，例如 `below-minTurnMs`、`subagent-session`）。排查「为什么没弹」先看这个文件。
 
 设置页相关：宿主会把当前浏览器模块图的摘要写到
 
@@ -142,6 +150,8 @@ powershell -NoProfile -File test/click-choice.ps1 -Title 'Self-test' -ButtonName
 - 选择卡一次只接管 **1～4 个问题**、每题 **1～5 个选项** 且 **不支持多选**；其余情况直接交给 Web UI 对话框。
 - 同一时刻最多叠 2 张通知卡，超出的直接跳过（不排队）。
 - 问题卡片串行：前一个问完再弹下一个。
+- 审批卡默认只在 Harness 未聚焦时接管；前台时仍用应用内审批卡（可在设置里改成「总是」）。DSH 的审批只有「一次性允许 / 拒绝」，桌面卡也不提供“永远允许”。
+- 多显示器：卡片跟随 DSH 主窗口所在的屏幕；混合 DPI 缩放下按主屏比例折算，位置可能有几个像素偏差。
 - 卡片窗口置顶显示、不抢焦点（`focusOnOpen` 只在点「查看」时前置 Harness 窗口并切回对应对话）。
 - 「点查看切回对话」靠插件客户端半侧长轮询 Host 来驱动：**升级插件后需要让页面重新加载一次**（最稳妥是重启 Harness；Host 侧的弹窗、焦点与路由会随插件热重载即时生效，只有页面里那半侧代码要等重新加载）。
 

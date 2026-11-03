@@ -2,10 +2,13 @@
 <#
     dsh-desktop-notifier popup renderer.
 
-    Shows one WPF card in the bottom-right corner of the primary work area.
-    The card follows the Windows 11 toast layout: a slim header with the app
-    icon, the app name and a close button, then a body with the plugin glyph,
-    a bold title, the message and a dimmed meta line, and finally the actions.
+    Shows one WPF card in the bottom-right corner of the work area. The target
+    monitor is the one hosting the DSH window (so a second-monitor session gets
+    its card there), falling back to the monitor under the cursor and finally to
+    the primary one. The card follows the Windows 11 toast layout: a slim header
+    with the app icon, the app name and a close button, then a body with the
+    plugin glyph, a bold title, the message and a dimmed meta line, and finally
+    the actions.
 
     Reads a JSON payload (UTF-8) from -PayloadFile, writes exactly one JSON
     result line to stdout, then exits.
@@ -26,6 +29,11 @@ $script:Timer = $null
 $script:Window = $null
 $script:CustomBox = $null
 $script:Watermark = $null
+$script:WorkArea = $null
+
+# Sound presets live in one helper so the Settings page's preview button plays
+# exactly what the cards play.
+. (Join-Path $PSScriptRoot 'sound.ps1')
 
 function Write-ResultAndExit {
     param([string]$Action, [string]$ErrorText, [string]$Text)
@@ -152,7 +160,51 @@ try {
     $accentSoft = if ($dark) { '#2E4176E6' } else { '#1F4176E6' }
     $accentText = if ($dark) { '#8fb6ff' } else { '#2563eb' }
 
-    $work = [System.Windows.SystemParameters]::WorkArea
+    # ── target monitor ───────────────────────────────────────────────────────
+    # Prefer the monitor that hosts the DSH window, then the monitor under the
+    # cursor, then the primary one. WPF positions windows in device-independent
+    # pixels of the *system* DPI, so a monitor's physical work area is divided by
+    # the primary screen's DIP/physical ratio before it is used.
+    function Get-TargetWorkArea {
+        try {
+            Add-Type -AssemblyName System.Windows.Forms
+            $screens = [System.Windows.Forms.Screen]::AllScreens
+            if (-not $screens -or $screens.Count -eq 0) { return [System.Windows.SystemParameters]::WorkArea }
+
+            $target = $null
+            try {
+                foreach ($proc in @(Get-Process -Name 'DeepSeek Harness' -ErrorAction SilentlyContinue)) {
+                    if ($proc.MainWindowHandle -eq [System.IntPtr]::Zero) { continue }
+                    $target = [System.Windows.Forms.Screen]::FromHandle($proc.MainWindowHandle)
+                    if ($target) { break }
+                }
+            } catch { }
+            if (-not $target) {
+                $cursor = [System.Windows.Forms.Cursor]::Position
+                $target = $screens | Where-Object { $_.Bounds.Contains($cursor) } | Select-Object -First 1
+            }
+            if (-not $target) { $target = $screens[0] }
+
+            $scale = 1.0
+            $primary = $screens | Where-Object { $_.Primary } | Select-Object -First 1
+            if ($primary -and $primary.Bounds.Width -gt 0) {
+                $scale = [double][System.Windows.SystemParameters]::PrimaryScreenWidth / [double]$primary.Bounds.Width
+                if ($scale -le 0) { $scale = 1.0 }
+            }
+
+            $r = $target.WorkingArea
+            return [System.Windows.Rect]::new(
+                ([double]$r.X / $scale),
+                ([double]$r.Y / $scale),
+                ([double]$r.Width / $scale),
+                ([double]$r.Height / $scale))
+        } catch {
+            return [System.Windows.SystemParameters]::WorkArea
+        }
+    }
+
+    $script:WorkArea = Get-TargetWorkArea
+    $work = $script:WorkArea
     $width = if ($data.width) { [double]$data.width } else { 400 }
     $margin = 12
     $slot = if ($null -ne $data.slot) { [int]$data.slot } else { 0 }
@@ -510,7 +562,8 @@ try {
     # SizeToContent makes the real height known only after layout.
     $win.Add_Loaded({
         $w = $script:Window
-        $wa = [System.Windows.SystemParameters]::WorkArea
+        $wa = $script:WorkArea
+        if ($null -eq $wa) { $wa = [System.Windows.SystemParameters]::WorkArea }
         $h = $w.ActualHeight
         $target = $wa.Bottom - $h - 12 - ($slot * ($h + 8))
         if ($target -lt $wa.Top) { $target = $wa.Top + 12 }
@@ -531,48 +584,19 @@ try {
         $w.BeginAnimation([System.Windows.Window]::OpacityProperty, $fade)
     })
 
-    # ── sound：可配置提示音 ─────────────────────────────────────────────────
-    # none = 静音；default = 按卡片类型（question → Question，其他 → Asterisk）；
-    # 其余取值映射到系统音效（SystemSounds）或 C:\Windows\Media 下的 wav。
+    # ── sound：可配置提示音（可自定义 wav 文件）──────────────────────────────
+    # none = 静音；default = 按卡片类型（question → Question，approval →
+    # Exclamation，其他 → Asterisk）；其余取值映射到系统音效或 Media 下的 wav；
+    # payload.soundFile 是个存在的 .wav 时优先播放它。映射集中在 scripts/sound.ps1，
+    # 设置页的“试听”按钮复用同一个函数。
     $soundName = 'default'
     if ($null -ne $data.sound) {
         if ($data.sound -is [bool]) { if ($data.sound) { $soundName = 'default' } else { $soundName = 'none' } }
         else { $soundName = ([string]$data.sound).ToLowerInvariant() }
     }
-    if ($soundName -and $soundName -ne 'none') {
-        $playAs = $soundName
-        if ($playAs -eq 'default') {
-            if ($data.kind -eq 'question') { $playAs = 'question' } else { $playAs = 'asterisk' }
-        }
-        $mediaNames = @{
-            notify    = 'Windows Notify.wav'
-            ding      = 'Windows Ding.wav'
-            chimes    = 'chimes.wav'
-            tada      = 'tada.wav'
-            email     = 'Windows Notify Email.wav'
-            calendar  = 'Windows Notify Calendar.wav'
-            messaging = 'Windows Notify Messaging.wav'
-            nudge     = 'Windows Message Nudge.wav'
-            reminder  = 'Windows Notify System Generic.wav'
-        }
-        try {
-            switch ($playAs) {
-                'question'    { [System.Media.SystemSounds]::Question.Play() }
-                'asterisk'    { [System.Media.SystemSounds]::Asterisk.Play() }
-                'exclamation' { [System.Media.SystemSounds]::Exclamation.Play() }
-                'critical'    { [System.Media.SystemSounds]::Hand.Play() }
-                default {
-                    if ($mediaNames.ContainsKey($playAs)) {
-                        $wav = Join-Path $env:WINDIR ('Media\' + $mediaNames[$playAs])
-                        if (Test-Path -LiteralPath $wav) {
-                            $player = New-Object System.Media.SoundPlayer $wav
-                            $player.Play()
-                        }
-                    }
-                }
-            }
-        } catch { }
-    }
+    $soundFile = ''
+    if ($data.soundFile) { $soundFile = [string]$data.soundFile }
+    Play-NotifierSound -Name $soundName -Kind ([string]$data.kind) -File $soundFile
 
     $timeoutMs = 0
     if ($null -ne $data.timeoutMs) { $timeoutMs = [int]$data.timeoutMs }

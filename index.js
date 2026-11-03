@@ -26,6 +26,8 @@ import { resolveThemePreference } from './lib/theme.js'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const POPUP_SCRIPT = path.join(HERE, 'scripts', 'popup.ps1')
 const FOCUS_SCRIPT = path.join(HERE, 'scripts', 'focus-window.ps1')
+/** Plays one sound and prints `{action:"played"}`: used by the Settings preview. */
+const SOUND_SCRIPT = path.join(HERE, 'scripts', 'preview-sound.ps1')
 
 const POWERSHELL = 'powershell.exe'
 
@@ -52,6 +54,16 @@ const DEFAULTS = {
   /** One entry of SOUNDS; 'none' keeps the card silent. */
   sound: 'default',
   focusOnOpen: true,
+  /**
+   * Approval requests: 'unfocused' shows the allow/deny card only while the DSH
+   * window is in the background (a focused window already has the in-app
+   * composer), 'always' shows it either way, 'off' leaves approvals to the Web UI.
+   */
+  answerApprovals: 'unfocused',
+  /** How long the approval card waits before the in-app card takes over. */
+  approvalTimeoutMs: 120000,
+  /** Optional .wav path played instead of the preset chosen in `sound`. */
+  soundFile: '',
   locale: 'zh',
   /** Append every decision to `%TEMP%\dsh-desktop-notifier-state.json`. */
   diagnostics: true,
@@ -96,6 +108,9 @@ export const Config = z.object({
   theme: z.union(['auto', 'light', 'dark', 'system']).default(DEFAULTS.theme).volatile(),
   sound: z.union([...SOUNDS, true, false]).default(DEFAULTS.sound).volatile(),
   focusOnOpen: z.boolean().default(DEFAULTS.focusOnOpen).volatile(),
+  answerApprovals: z.union(['unfocused', 'always', 'off']).default(DEFAULTS.answerApprovals).volatile(),
+  approvalTimeoutMs: z.number().min(0).max(3600000).default(DEFAULTS.approvalTimeoutMs).volatile(),
+  soundFile: z.string().default(DEFAULTS.soundFile).volatile(),
   locale: z.union(['zh', 'en']).default(DEFAULTS.locale).volatile(),
   diagnostics: z.boolean().default(DEFAULTS.diagnostics).volatile(),
   popupScript: z.string().default(DEFAULTS.popupScript),
@@ -124,6 +139,15 @@ const FALLBACK_TEXT = {
     waiting: '等待你的选择',
     customPlaceholder: '输入自定义回答…',
     send: '发送',
+    approvalTitle: '需要你的授权',
+    approvalWaiting: '等待你的授权',
+    allow: '允许一次',
+    deny: '拒绝',
+    testTitle: '测试通知',
+    testBody: '如果你看到这张卡片，说明桌面通知已经接好了。',
+    testQuestionBody: '这是一张测试选择卡：选一项，或者直接输入你的回答。',
+    testOptions: ['选项一', '选项二', '选项三'],
+    testApprovalBody: 'bash — 测试：请求执行一条需要授权的命令',
     usedMs: (s) => `用时 ${s}s`,
   },
   en: {
@@ -136,6 +160,12 @@ const FALLBACK_TEXT = {
     waiting: 'waiting for your choice',
     customPlaceholder: 'Type your own answer…',
     send: 'Send',
+    approvalTitle: 'Permission needed',
+    approvalWaiting: 'waiting for your decision',
+    allow: 'Allow once',
+    deny: 'Deny',
+    testTitle: 'Test notification',
+    testBody: 'If you can see this card, desktop notifications are wired up.',
     usedMs: (s) => `${s}s`,
   },
 }
@@ -285,6 +315,8 @@ const CLIENT_GRAPH_FILE = path.join(tmpdir(), 'dsh-desktop-notifier-clientgraph.
  * plain browser tab can reach it.
  */
 const NAV_ROUTE = '/desktop-notifier/navigate'
+/** Settings-page side channel: render a sample card / play the chosen sound. */
+const TEST_ROUTE = '/desktop-notifier/action'
 const recent = []
 
 function noteState(enabled, entry) {
@@ -598,6 +630,18 @@ export function apply(ctx, config = {}) {
           }),
         'dsh-desktop-notifier: session hand-off route',
       )
+      // Settings page: "测试通知" and "试听提示音" buttons land here.
+      child.effect(
+        () =>
+          server.register({
+            kind: 'exact',
+            path: TEST_ROUTE,
+            handler: (req, res) => {
+              void serveAction(req, res)
+            },
+          }),
+        'dsh-desktop-notifier: settings action route',
+      )
     })
   }
 
@@ -634,7 +678,7 @@ export function apply(ctx, config = {}) {
   let activePopups = 0
   const rendererScript =
     typeof get('popupScript') === 'string' && get('popupScript').length > 0 ? get('popupScript') : POPUP_SCRIPT
-  async function show(payload, { blocking = false } = {}) {
+  async function show(payload, { blocking = false, onChild } = {}) {
     if (!blocking && activePopups >= 2) return { action: 'skipped' }
     const slot = Math.min(activePopups, 2)
     activePopups += 1
@@ -644,10 +688,13 @@ export function apply(ctx, config = {}) {
           ...payload,
           slot,
           theme: resolveTheme(get('theme')),
-          notifyWhen: get('notifyWhen'),
-          sound: get('sound'),
+          // A card may override the global timing / sound (the approval card only
+          // interrupts while the app is unfocused, the preview plays one sound).
+          notifyWhen: payload.notifyWhen ?? get('notifyWhen'),
+          sound: payload.sound ?? get('sound'),
+          soundFile: payload.soundFile ?? get('soundFile'),
         },
-        { onChild: trackChild, script: rendererScript },
+        { onChild: typeof onChild === 'function' ? onChild : trackChild, script: rendererScript },
       )
       if (result.action === 'error') {
         log(ctx, 'warn', `popup failed: ${result.error ?? result.stderr ?? 'unknown'}`)
@@ -655,6 +702,239 @@ export function apply(ctx, config = {}) {
       return result
     } finally {
       activePopups = Math.max(0, activePopups - 1)
+    }
+  }
+
+  // ── 1c. permission requests: allow once / deny, answered from the desktop ──
+  // `approval/request` is a waterfall: the first listener that returns an outcome
+  // answers the request, while returning nothing (or calling `next()`) hands it to
+  // the next answerer, which is the Web UI card. This listener is prepended, but
+  // it only answers when its own card actually came back with a decision — a
+  // focused window, a skipped card, an abort or a timeout all delegate, so the
+  // in-app card keeps working exactly as before.
+  const approvalMode = () => {
+    const value = get('answerApprovals')
+    return value === 'always' || value === 'off' ? value : 'unfocused'
+  }
+
+  async function askApproval(request) {
+    const toolName = typeof request?.toolName === 'string' && request.toolName ? request.toolName : 'tool'
+    const rawReason =
+      typeof request?.reason === 'string' && request.reason.trim()
+        ? request.reason.trim()
+        : typeof request?.displayReason === 'string'
+          ? request.displayReason.trim()
+          : ''
+    const body = rawReason
+      ? `${toolName} — ${squash(rawReason, Number(get('maxBodyChars')))}`
+      : toolName
+    const payload = {
+      kind: 'approval',
+      icon: '🔐',
+      title: t.approvalTitle,
+      body,
+      meta: [workspaceLabel(request?.agent), t.approvalWaiting].filter(Boolean).join(' · '),
+      accent: '#d97706',
+      actions: [
+        { id: 'allow', label: t.allow, primary: true },
+        { id: 'deny', label: t.deny },
+      ],
+      timeoutMs: Number(get('approvalTimeoutMs')),
+      // A focused window already shows the in-app card, so the desktop card is
+      // only wanted there when the user asked for it explicitly.
+      notifyWhen: approvalMode() === 'unfocused' ? 'unfocused' : 'always',
+    }
+    let child = null
+    const onAbort = () => {
+      try {
+        child?.kill()
+      } catch {
+        /* the renderer is already gone */
+      }
+    }
+    try {
+      request?.signal?.addEventListener?.('abort', onAbort)
+    } catch {
+      /* no abort signal on older hosts */
+    }
+    try {
+      const result = await show(payload, {
+        onChild: (proc) => {
+          child = proc
+          trackChild(proc)
+        },
+      })
+      if (result.action === 'allow') {
+        note({ kind: 'approval-card', outcome: 'allowed-once' })
+        return 'allowed-once'
+      }
+      if (result.action === 'deny') {
+        note({ kind: 'approval-card', outcome: 'rejected' })
+        return 'rejected'
+      }
+      note({ kind: 'approval-card', outcome: 'delegated', action: result.action })
+      return undefined
+    } finally {
+      try {
+        request?.signal?.removeEventListener?.('abort', onAbort)
+      } catch {
+        /* nothing to clean up */
+      }
+    }
+  }
+
+  ctx.on(
+    'approval/request',
+    async (request, next) => {
+      if (approvalMode() !== 'off') {
+        try {
+          const outcome = await askApproval(request)
+          if (outcome) return outcome
+        } catch (error) {
+          log(ctx, 'warn', `approval card failed: ${String(error)}`)
+        }
+      }
+      return typeof next === 'function' ? next() : undefined
+    },
+    { prepend: true },
+  )
+
+  // ── settings page: render a sample card / play the chosen sound ───────────
+  function sampleCard(kind) {
+    const meta = [workspaceLabel(), clockText()].filter(Boolean).join(' · ')
+    if (kind === 'question') {
+      return {
+        kind: 'question',
+        icon: '❓',
+        title: t.question,
+        body: t.testQuestionBody,
+        meta,
+        accent: '#f59e0b',
+        allowCustom: true,
+        customPlaceholder: t.customPlaceholder,
+        sendLabel: t.send,
+        actions: t.testOptions.map((label, index) => ({ id: `opt-${index}`, label, primary: index === 0 })),
+        timeoutMs: Number(get('questionTimeoutMs')),
+        width: 424,
+      }
+    }
+    if (kind === 'approval') {
+      return {
+        kind: 'approval',
+        icon: '🔐',
+        title: t.approvalTitle,
+        body: t.testApprovalBody,
+        meta: [workspaceLabel(), t.approvalWaiting].filter(Boolean).join(' · '),
+        accent: '#d97706',
+        actions: [
+          { id: 'allow', label: t.allow, primary: true },
+          { id: 'deny', label: t.deny },
+        ],
+        timeoutMs: Number(get('approvalTimeoutMs')),
+      }
+    }
+    return {
+      kind: 'info',
+      icon: '🔔',
+      title: t.testTitle,
+      body: t.testBody,
+      meta,
+      accent: '#4176e6',
+      actions: [
+        { id: 'open', label: t.open, primary: true },
+        { id: 'close', label: t.close },
+      ],
+      timeoutMs: Number(get('infoTimeoutMs')),
+    }
+  }
+
+  /** Play the configured sound once — the Settings "试听" button. */
+  function previewSound() {
+    return new Promise((resolve) => {
+      let dir
+      let payloadFile
+      try {
+        dir = mkdtempSync(path.join(tmpdir(), 'dsh-notifier-sound-'))
+        payloadFile = path.join(dir, 'payload.json')
+        writeFileSync(payloadFile, JSON.stringify({ sound: get('sound'), soundFile: get('soundFile') }), 'utf8')
+      } catch (error) {
+        resolve({ action: 'error', error: String(error) })
+        return
+      }
+      const args = [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        SOUND_SCRIPT,
+        '-PayloadFile',
+        payloadFile,
+      ]
+      let child
+      try {
+        child = spawn(POWERSHELL, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+      } catch (error) {
+        resolve({ action: 'error', error: String(error) })
+        return
+      }
+      let stdout = ''
+      child.stdout.on('data', (chunk) => {
+        stdout += String(chunk)
+      })
+      child.on('error', (error) => resolve({ action: 'error', error: String(error) }))
+      child.on('close', () => {
+        try {
+          rmSync(dir, { recursive: true, force: true })
+        } catch {
+          /* best effort */
+        }
+        try {
+          resolve(JSON.parse(stdout.trim().split('\n').pop()))
+        } catch {
+          resolve({ action: 'played' })
+        }
+      })
+    })
+  }
+
+  async function serveAction(req, res) {
+    const reply = (status, payload) => {
+      if (res.writableEnded) return
+      try {
+        res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+        res.end(JSON.stringify(payload))
+      } catch {
+        /* the page went away between read and write */
+      }
+    }
+    if (req.method !== 'POST') {
+      reply(405, { ok: false, error: 'POST only' })
+      return
+    }
+    const body = await readJsonBody(req)
+    if (!body || typeof body !== 'object') {
+      reply(400, { ok: false })
+      return
+    }
+    const action = typeof body.action === 'string' ? body.action : ''
+    try {
+      if (action === 'test-card') {
+        const kind = body.kind === 'question' || body.kind === 'approval' ? body.kind : 'info'
+        const result = await show(sampleCard(kind))
+        note({ kind: 'test-card', card: kind, action: result.action })
+        reply(200, { ok: result.action !== 'error', card: kind, action: result.action })
+        return
+      }
+      if (action === 'preview-sound') {
+        const result = await previewSound()
+        note({ kind: 'preview-sound', sound: get('sound'), soundFile: get('soundFile'), action: result.action })
+        reply(200, { ok: result.action !== 'error', action: result.action })
+        return
+      }
+      reply(400, { ok: false, error: 'unknown action' })
+    } catch (error) {
+      reply(500, { ok: false, error: String(error).slice(0, 300) })
     }
   }
 

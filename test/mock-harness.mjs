@@ -287,6 +287,81 @@ await emit(
 )
 check('multiSelect question is left to the Web UI', multiNext === true)
 
+// ── approval requests: allow / deny from the card, otherwise delegate ───────
+check('registers approval/request', actions().includes('approval/request'))
+const approvalRegistration = (listeners.get('approval/request') ?? [])[0]
+check('approval listener is prepended', approvalRegistration?.options?.prepend === true)
+const approvalRequest = () => ({
+  agent,
+  toolName: 'bash',
+  reason: '需要 sudo 权限安装依赖',
+  callId: 'call-1',
+})
+const approvalCard = () => capturedPayloads().filter((payload) => payload.kind === 'approval').pop()
+
+process.env.DSH_NOTIFIER_ACTION = 'allow'
+let allowNext = 0
+const allowed = await emit('approval/request', approvalRequest(), () => {
+  allowNext += 1
+  return 'rejected'
+})
+await wait(400)
+check('approval card was rendered', approvalCard() !== undefined)
+check('approval card names the tool and the reason', String(approvalCard()?.body ?? '').includes('bash'), approvalCard()?.body)
+check('approval card offers allow / deny', JSON.stringify(approvalCard()?.actions) === JSON.stringify([
+  { id: 'allow', label: '允许一次', primary: true },
+  { id: 'deny', label: '拒绝' },
+]), JSON.stringify(approvalCard()?.actions))
+check('allow answers allowed-once', allowed === 'allowed-once', String(allowed))
+check('allow does not fall through to the Web UI', allowNext === 0)
+
+process.env.DSH_NOTIFIER_ACTION = 'deny'
+const denied = await emit('approval/request', approvalRequest(), () => 'allowed-once')
+check('deny answers rejected', denied === 'rejected', String(denied))
+
+process.env.DSH_NOTIFIER_ACTION = 'dismissed'
+let approvalDelegated = 0
+const delegatedAnswer = await emit('approval/request', approvalRequest(), () => {
+  approvalDelegated += 1
+  return 'allowed-once'
+})
+check('an unanswered approval card delegates to the Web UI', approvalDelegated === 1, String(approvalDelegated))
+check('the delegated answer is passed through', delegatedAnswer === 'allowed-once', String(delegatedAnswer))
+delete process.env.DSH_NOTIFIER_ACTION
+
+// ── Settings page: sample cards go through the action route ────────────────
+const actionRoute = mainCtx.routes.get('/desktop-notifier/action')
+check('registers the settings action route', actionRoute?.kind === 'exact', actionRoute?.kind)
+const actionCall = async (body) => {
+  const res = {
+    writableEnded: false,
+    writeHead(status) {
+      this.status = status
+    },
+    end(payload) {
+      this.writableEnded = true
+      this.body = payload
+    },
+  }
+  const req = {
+    method: 'POST',
+    [Symbol.asyncIterator]: async function* () {
+      yield Buffer.from(JSON.stringify(body), 'utf8')
+    },
+  }
+  actionRoute.handler(req, res)
+  for (let i = 0; i < 100 && !res.writableEnded; i += 1) await wait(30)
+  return JSON.parse(res.body || '{}')
+}
+const testResult = await actionCall({ action: 'test-card', kind: 'info' })
+check('the action route renders a sample card', testResult.ok === true && testResult.card === 'info', JSON.stringify(testResult))
+check(
+  'the sample card is the test notification',
+  capturedPayloads().some((payload) => payload.kind === 'info' && payload.title === '测试通知'),
+)
+const unknownAction = await actionCall({ action: 'nope' })
+check('unknown settings actions are rejected', unknownAction.ok === false, JSON.stringify(unknownAction))
+
 // ── appearance: explicit plugin config wins, auto defers to the profile ─────
 const cardByBody = (body) => capturedPayloads().find((payload) => payload.body === body)
 

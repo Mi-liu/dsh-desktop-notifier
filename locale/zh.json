@@ -11,6 +11,10 @@
     "open": "查看",
     "close": "关闭",
     "waiting": "等待你的选择",
+    "approvalTitle": "需要你的授权",
+    "approvalWaiting": "等待你的授权",
+    "allow": "允许一次",
+    "deny": "拒绝",
     "customPlaceholder": "输入自定义回答…",
     "send": "发送"
   }
