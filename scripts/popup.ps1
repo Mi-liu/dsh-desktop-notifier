@@ -81,6 +81,18 @@ function Get-RoundedButtonTemplate {
     return [System.Windows.Markup.XamlReader]::Parse($xaml)
 }
 
+# A fully transparent button used as the "click the whole card" hotspot of a
+# notification: no chrome, but it still is a real Button, so mouse clicks and
+# UI Automation both reach it (and a screen reader announces it).
+function Get-HotspotTemplate {
+    $xaml = @'
+<ControlTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" TargetType="Button">
+  <Border Background="Transparent"/>
+</ControlTemplate>
+'@
+    return [System.Windows.Markup.XamlReader]::Parse($xaml)
+}
+
 try {
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, System.Xaml, System.Drawing
 
@@ -165,6 +177,12 @@ try {
     # 选项行首项用“强调色的浅色底 + 强调色文字”，比整块实心蓝更接近系统通知的观感。
     $accentSoft = if ($dark) { '#2E4176E6' } else { '#1F4176E6' }
     $accentText = if ($dark) { '#8fb6ff' } else { '#2563eb' }
+
+    # 卡片种类。通知卡（回合完成 / 出错 / 设置页的测试卡）不渲染按钮行：
+    # 整张卡片就是“查看”，右上角 ✕ 关闭；只有真正需要明确选择的选择卡与审批卡保留按钮。
+    $isQuestion = ($data.kind -eq 'question')
+    $isApproval = ($data.kind -eq 'approval')
+    $isNotification = (-not $isQuestion) -and (-not $isApproval)
 
     # ── target monitor ───────────────────────────────────────────────────────
     # Prefer the monitor that hosts the DSH window, then the monitor under the
@@ -315,7 +333,9 @@ try {
     $closeBtn.Template = Get-RoundedButtonTemplate -Radius 6
     [System.Windows.Automation.AutomationProperties]::SetName($closeBtn, 'Close')
     [System.Windows.Controls.Grid]::SetColumn($closeBtn, 2)
-    [void]$header.Children.Add($closeBtn)
+    # A notification floats the ✕ above the clickable card (see below); every
+    # other card keeps it in the header, next to the app name.
+    if (-not $isNotification) { [void]$header.Children.Add($closeBtn) }
     [void]$content.Children.Add($header)
 
     # ── body: glyph + (title / message / meta) ──────────────────────────────
@@ -388,8 +408,11 @@ try {
     # a notice keeps two compact buttons on the right.
     $actions = @()
     if ($data.actions) { $actions = @($data.actions) }
-    $isQuestion = ($data.kind -eq 'question')
-    if ($actions.Count -gt 0) {
+    $openAction = $null
+    if ($isNotification) {
+        $openAction = @(@($actions) | Where-Object { [string]$_.id -eq 'open' } | Select-Object -First 1)
+    }
+    if ($actions.Count -gt 0 -and -not $isNotification) {
         if ($isQuestion) {
             $panel = New-Object System.Windows.Controls.StackPanel
             $panel.HorizontalAlignment = 'Stretch'
@@ -554,6 +577,63 @@ try {
         })
 
         [void]$content.Children.Add($inputRow)
+    }
+
+    # ── clickable notification card ──────────────────────────────────────────
+    # A notification has no button row: the whole card is "View" (open) and the
+    # ✕ in the corner dismisses it. The card body is therefore covered by a
+    # transparent Button hotspot (real mouse clicks and UI Automation both reach
+    # it), with the text layer hit-test invisible and the ✕ drawn on top.
+    # Cards without an "open" action (the error notification) turn a body click
+    # into a plain dismissal, so clicking anywhere still does the obvious thing.
+    if ($isNotification) {
+        $hoverBg = '#2c2c2f'
+        $hoverBorder = '#4c4f54'
+        if (-not $dark) { $hoverBg = '#fbfcfe'; $hoverBorder = '#d6dae0' }
+
+        $hotspotAction = if (@($openAction).Count -gt 0) { 'open' } else { 'dismissed' }
+        $hotspot = New-Object System.Windows.Controls.Button
+        $hotspot.Tag = $hotspotAction
+        $hotspot.Background = [System.Windows.Media.Brushes]::Transparent
+        $hotspot.BorderThickness = New-Object System.Windows.Thickness(0)
+        $hotspot.Padding = New-Object System.Windows.Thickness(0)
+        $hotspot.Focusable = $false
+        $hotspot.Cursor = [System.Windows.Input.Cursors]::Hand
+        $hotspot.Template = Get-HotspotTemplate
+        [System.Windows.Automation.AutomationProperties]::SetName($hotspot, $hotspotAction)
+        [System.Windows.Automation.AutomationProperties]::SetHelpText($hotspot, [string]$data.title)
+        $hotspot.Add_Click({
+            param($sender, $eventArgs)
+            $script:ResultAction = [string]$sender.Tag
+            if ($script:ResultAction -eq 'open' -and $data.focusOnOpen -ne $false) {
+                # Raise the window after the card is gone (see the Close handler).
+                $script:FocusAfterClose = $true
+            }
+            $script:Window.Close()
+        })
+        $hotspot.Add_MouseEnter({
+            $card.BorderBrush = Brush $hoverBorder
+            $card.Background = Brush $hoverBg
+        })
+        $hotspot.Add_MouseLeave({
+            $card.BorderBrush = Brush $borderColor
+            $card.Background = Brush $bgColor
+        })
+
+        # The text layer must not swallow the click; the ✕ sits above both.
+        $content.IsHitTestVisible = $false
+        $card.Child = $null
+        $closeOverlay = New-Object System.Windows.Controls.Grid
+        $closeOverlay.HorizontalAlignment = 'Right'
+        $closeOverlay.VerticalAlignment = 'Top'
+        $closeOverlay.Margin = New-Object System.Windows.Thickness(0, 2, 6, 0)
+        [void]$closeOverlay.Children.Add($closeBtn)
+
+        $cardGrid = New-Object System.Windows.Controls.Grid
+        [void]$cardGrid.Children.Add($hotspot)
+        [void]$cardGrid.Children.Add($content)
+        [void]$cardGrid.Children.Add($closeOverlay)
+        $card.Child = $cardGrid
     }
 
     $win.Content = $root
