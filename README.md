@@ -17,14 +17,17 @@
 
 完成通知（浅色外观）：
 
-![完成通知卡片](assets/screenshot-info-light.png)
+![完成通知卡片（浅色）](assets/storefront/screenshot-info-light.png)
+
+完成通知（深色外观）：
+
+![完成通知卡片（深色）](assets/storefront/screenshot-info-dark.png)
 
 选择判断卡片（浅色 / 深色，深色主题下自动换深色配色）：
 
-<p>
-<img src="assets/screenshot-question-light.png" alt="选择卡片（浅色）" width="49%">
-<img src="assets/screenshot-question-dark.png" alt="选择卡片（深色）" width="49%">
-</p>
+![选择卡片（浅色）](assets/storefront/screenshot-question-light.png)
+
+![选择卡片（深色）](assets/storefront/screenshot-question-dark.png)
 
 ## 安装
 

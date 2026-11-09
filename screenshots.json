@@ -1,7 +1,8 @@
 {
   "screenshots": [
-    "assets/screenshot-info-light.png",
-    "assets/screenshot-question-light.png",
-    "assets/screenshot-question-dark.png"
+    "assets/storefront/screenshot-info-light.png",
+    "assets/storefront/screenshot-info-dark.png",
+    "assets/storefront/screenshot-question-light.png",
+    "assets/storefront/screenshot-question-dark.png"
   ]
 }
