@@ -18,9 +18,11 @@ function Play-NotifierSound {
         [string]$File = ''
     )
 
-    $name = ''
-    if ($Name) { $name = $Name.ToLowerInvariant() }
-    if (-not $name -or $name -eq 'none') { return }
+    # Keep the normalized name in its own variable: PowerShell variable names are
+    # case-insensitive, so assigning to $name would overwrite the $Name parameter.
+    $preset = ''
+    if ($Name) { $preset = $Name.ToLowerInvariant() }
+    if (-not $preset -or $preset -eq 'none') { return }
 
     if ($File -and (Test-Path -LiteralPath $File)) {
         try {
@@ -30,7 +32,7 @@ function Play-NotifierSound {
         } catch { }
     }
 
-    $playAs = $name
+    $playAs = $preset
     if ($playAs -eq 'default') {
         switch ($Kind) {
             'question' { $playAs = 'question' }

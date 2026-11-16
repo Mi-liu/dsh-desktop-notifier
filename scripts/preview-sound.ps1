@@ -42,6 +42,9 @@ try {
     if ($data.soundFile) { $file = [string]$data.soundFile }
 
     Play-NotifierSound -Name $sound -Kind 'question' -File $file
+    # Play-NotifierSound starts playback asynchronously; wait a moment before the
+    # process exits, otherwise [Environment]::Exit would cut the sound off.
+    Start-Sleep -Milliseconds 1600
     Write-Result -Action 'played'
 } catch {
     Write-Result -Action 'error'
